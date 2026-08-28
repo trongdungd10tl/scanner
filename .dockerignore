@@ -1,0 +1,16 @@
+# Khong gui nhung thu nay vao ngu canh build.
+#
+# .venv gan 3GB va models 354MB - khong loai ra thi Docker phai chep ca dong do
+# truoc khi bat dau build, rat cham, ma image cung khong dung toi chung:
+# thu vien do Dockerfile tu cai, con mo hinh gan bang volume.
+.venv/
+models/
+__pycache__/
+*.pyc
+
+# Cong cu chi dung o may phat trien
+tai-mo-hinh.py
+tai-song-song.sh
+quet.py
+kiem-thu.py
+README.md

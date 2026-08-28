@@ -1,0 +1,18 @@
+# Dich vu quet anh nhay cam.
+#
+#   docker compose up -d --build     bat (lan dau se build, mat vai phut)
+#   docker compose logs -f           xem log
+#   docker compose down              tat
+#
+# TRUOC KHI CHAY LAN DAU phai co trong so mo hinh trong ./models:
+#   bash tai-song-song.sh
+services:
+  scanner:
+    build: .
+    container_name: nsfw-scanner
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      # Chi doc: container khong co ly do gi de sua trong so mo hinh.
+      - ./models:/app/models:ro

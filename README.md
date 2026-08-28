@@ -6,7 +6,33 @@ Bọc mô hình [nsfw-image-detection](https://github.com/PRITHIVSAKTHIUR/nsfw-i
 Repo gốc chỉ có demo Gradio, không gọi từ ứng dụng khác được — `app.py` ở đây là
 phần bọc.
 
-## Chạy
+## Chạy bằng Docker (khuyên dùng)
+
+```bash
+bash tai-song-song.sh            # một lần: tải trọng số về ./models
+docker compose up -d --build     # lần đầu build vài phút
+```
+
+Kiểm: <http://localhost:8000/docs>
+
+Trọng số **không nằm trong image** — gắn từ ngoài vào bằng volume, chỉ đọc.
+Giống cách MySQL của dự án giữ dữ liệu ngoài image: image gọn, và đổi mô hình
+khác chỉ cần thay thư mục `models/` chứ không phải build lại.
+
+Khi làm video, bỏ dấu `#` ở dòng `ffmpeg` trong `Dockerfile` là xong — không máy
+nào phải tự cài.
+
+| | |
+|---|---|
+| `docker compose logs -f` | xem log |
+| `docker compose down` | tắt |
+| `docker compose up -d --build` | build lại sau khi sửa `app.py` |
+
+## Chạy bằng venv (khi đang sửa code)
+
+Sửa `app.py` xong không phải build lại image, chạy thẳng cho nhanh.
+
+
 
 ```bash
 # Lần đầu
