@@ -22,6 +22,18 @@ khác chỉ cần thay thư mục `models/` chứ không phải build lại.
 Khi làm video, bỏ dấu `#` ở dòng `ffmpeg` trong `Dockerfile` là xong — không máy
 nào phải tự cài.
 
+Số liệu đo được sau khi build:
+
+| | |
+|---|---|
+| Kích thước image | **1.77 GB** (phần lớn là torch) |
+| Thời gian build lần đầu | ~3,5 phút |
+| Chấm điểm | ~2000 ms/ảnh — ngang bản venv |
+| Chạy bằng | tài khoản `quet` uid 10001, không phải root |
+
+Điểm chấm trong container **giống hệt** bản chạy venv, nên đóng gói không làm
+lệch kết quả.
+
 | | |
 |---|---|
 | `docker compose logs -f` | xem log |
@@ -141,10 +153,18 @@ dùng để **sắp xếp** hàng đợi, không phải để tự động công
 
 ## Dừng dịch vụ
 
+Chạy bằng Docker: `docker compose down`
+
+Chạy bằng venv:
+
 ```bash
-# Windows
 powershell -Command "Get-NetTCPConnection -LocalPort 8000 -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }"
 ```
+
+**Đừng chạy cả hai cùng lúc.** Windows cho phép venv giữ `127.0.0.1:8000` trong
+khi container giữ `0.0.0.0:8000`, không báo lỗi gì — nhưng request tới
+`localhost` sẽ vào bản venv vì nó khớp cụ thể hơn. Sửa code rồi tưởng đang test
+container mà thật ra đang test bản cũ.
 
 ## Giới hạn
 
