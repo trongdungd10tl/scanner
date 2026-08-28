@@ -1,0 +1,9 @@
+# Torch ban CPU. Cai bang:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+# Khong ghi torch o day de pip khong keo nham ban CUDA (~2.5GB).
+transformers>=5.0
+pillow>=11
+numpy>=2
+fastapi>=0.140
+uvicorn[standard]>=0.34
+python-multipart>=0.0.9
