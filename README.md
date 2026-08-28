@@ -21,6 +21,35 @@ python -m venv .venv
 
 Kiểm nhanh: `.venv/Scripts/python.exe kiem-thu.py`
 
+## Thử nhanh với ảnh của bạn
+
+**Cách dễ nhất — qua trình duyệt.** FastAPI dựng sẵn giao diện thử:
+
+<http://127.0.0.1:8000/docs> → chọn `POST /scan` → *Try it out* → *Choose File* →
+*Execute*. Kết quả JSON hiện ngay bên dưới.
+
+**Qua dòng lệnh**, có biểu đồ cho dễ đọc:
+
+```bash
+.venv/Scripts/python.exe quet.py "D:nh-cua-toi.jpg"
+```
+
+```
+anh-cua-toi.jpg  (44 KB, image/jpeg)
+
+  Normal                 0.9097  ####################################
+  Enticing or Sensual    0.0608  ##
+  Anime Picture          0.0247  #
+  Hentai                 0.0032
+  Pornography            0.0016
+
+  ket luan   : Normal
+  nsfw_score : 0.0656
+  thoi gian  : 1917.4 ms
+```
+
+Quét dịch vụ ở máy khác thì đặt `SCANNER_URL`.
+
 ## API
 
 ```bash
