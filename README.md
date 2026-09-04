@@ -111,6 +111,43 @@ curl -X POST http://localhost:8000/scan -F "file=@anh.jpg"
 
 `GET /health` trả trạng thái nạp mô hình.
 
+### Giới hạn đầu vào
+
+| | Mặc định | Biến môi trường |
+|---|---|---|
+| Kích thước tệp | 10 MB | `MAX_FILE_BYTES` |
+| Số điểm ảnh | 24 triệu (6000×4000) | `MAX_PIXELS` |
+
+Vượt trần trả **413**, không phải ảnh trả **400**.
+
+**Phải có cả hai, thiếu cái nào cũng hở.** Trần kích thước chặn tệp 2GB làm đầy
+đĩa. Trần điểm ảnh chặn thứ mà trần kích thước bó tay: một PNG **252 KB** khai
+9000×9000 nở thành **231 MB RAM** khi giải nén — khuếch đại ~940 lần. Lá chắn
+sẵn có của Pillow **không bắt được** nó, vì 81 triệu điểm ảnh vẫn nằm dưới trần
+mặc định 89.478.485 của nó.
+
+Trần 10MB cao hơn trần 5MB của CMS để câu thông báo tử tế của CMS thắng — cùng
+logic với khoảng cách 6MB/5MB trong `application.yml`.
+
+Kiểm bằng `.venv/Scripts/python.exe kiem-tran.py` — chấm 6 trường hợp, gồm cả
+ảnh 4000×3000 thật phải **vào được** chứ không bị chặn nhầm.
+
+### Chặn ở đâu, vì sao ở đó
+
+Hai tầng, không thay thế nhau:
+
+**Middleware** đọc `content-length` và từ chối trước khi Starlette chạm vào thân
+request. Cần tầng này vì tới lúc `scan()` chạy thì đã muộn — Starlette đọc xong
+thân request và đổ phần vượt 1MB ra tệp tạm trên đĩa rồi.
+
+**Đếm trong `_doc_co_tran`** mới là thứ thật sự chặn: `content-length` có thể
+thiếu (gửi kiểu chunked) hoặc khai láo.
+
+Trần điểm ảnh kiểm **giữa** `Image.open()` và `.convert()`. `open()` chỉ đọc
+phần đầu tệp để biết kích thước, chưa cấp phát điểm ảnh nào — đo được **0.10 ms**
+so với **202.88 ms** của `convert()`, rẻ hơn gần 2000 lần. Kiểm sau `convert()`
+thì RAM đã bị ngốn mất rồi, kiểm cũng vô nghĩa.
+
 ### `nsfw_score` được tính thế nào
 
 Là **tổng** ba lớp không an toàn (`Hentai`, `Pornography`, `Enticing or Sensual`),
