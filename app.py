@@ -5,6 +5,13 @@ Wraps the SigLIP2 model strangerguardhf/nsfw_image_detection behind HTTP. Video,
 documents and streams are reduced to still frames by media.py and scored frame
 by frame; every endpoint answers in its own response, with no job to poll for.
 
+Images, video and streams are named by URL rather than uploaded: the caller has
+already stored the file somewhere, so sending the bytes again only moves them
+twice. Documents still accept an upload as well, since a PDF is often held
+before it is published anywhere. Anything named by URL goes through the
+public-address check in media.py, and ALLOW_HOSTS is what lets the scanner read
+from the application that sent the link.
+
 Staying synchronous is only honest because the work is bounded. Scoring one
 frame measured about 220ms, and media.py never yields more than MAX_FRAMES, so
 the slowest case is a predictable handful of seconds rather than an open-ended
@@ -184,19 +191,6 @@ def _reply(kind, scores, nsfw, count, worst, started):
     }
 
 
-async def _spool_into(upload, path):
-    """Streams an upload to disk. A video is too large to hold in memory."""
-    with open(path, "wb") as target:
-        while True:
-            chunk = await upload.read(1024 * 1024)
-            if not chunk:
-                break
-            target.write(chunk)
-    if not os.path.getsize(path):
-        raise HTTPException(status_code=400, detail="Empty file")
-    return path
-
-
 def _discard(*paths):
     for path in paths:
         if not path:
@@ -246,26 +240,26 @@ async def _bytes_from(file, url):
 
 
 @app.post("/scan")
-async def scan_image(file: UploadFile = File(default=None), url: str = Form(default=""),
-                     x_api_key: str = Header(default="")):
+async def scan_image(url: str = Form(...), x_api_key: str = Header(default="")):
     caller = _identify(x_api_key)
-    _one_source(file, url)
     _charge(caller)
     _load_model()
 
-    data, label = await _bytes_from(file, url)
+    try:
+        data = media.fetch_bytes(url)
+    except media.MediaError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     started = time.perf_counter()
     scores, nsfw = _score(_open(data))
     reply = _reply("image", scores, nsfw, 1, None, started)
-    log.info("%s image %s -> %s nsfw=%.4f", caller, label, reply["label"], nsfw)
+    log.info("%s image %s -> %s nsfw=%.4f", caller, url, reply["label"], nsfw)
     return reply
 
 
 @app.post("/scan/video")
-async def scan_video(file: UploadFile = File(default=None), url: str = Form(default=""),
-                     x_api_key: str = Header(default="")):
+async def scan_video(url: str = Form(...), x_api_key: str = Header(default="")):
     caller = _identify(x_api_key)
-    _one_source(file, url)
     _charge(caller)
     _load_model()
 
@@ -275,17 +269,12 @@ async def scan_video(file: UploadFile = File(default=None), url: str = Form(defa
     try:
         started = time.perf_counter()
         try:
-            if url:
-                media.fetch_to_file(url, source)
-                label = url
-            else:
-                await _spool_into(file, source)
-                label = file.filename
+            media.fetch_to_file(url, source)
             frames = media.video_frames(source)
         except media.MediaError as e:
             raise HTTPException(status_code=400, detail=str(e))
         folder = os.path.dirname(frames[0][1])
-        return _scan_frames(caller, "video", frames, label, started)
+        return _scan_frames(caller, "video", frames, url, started)
     finally:
         _discard(source, folder)
 

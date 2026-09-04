@@ -32,12 +32,15 @@ Bốn endpoint, tất cả nhận `multipart/form-data`:
 
 | | Trường | Nhận |
 |---|---|---|
-| `POST /scan` | `url` hoặc `file` | ảnh |
-| `POST /scan/video` | `url` hoặc `file` | video |
+| `POST /scan` | `url` | ảnh |
+| `POST /scan/video` | `url` | video |
 | `POST /scan/document` | `url` hoặc `file` | PDF |
 | `POST /scan/hls` | `url` | luồng `.m3u8` |
 
-Phải gửi **đúng một** trong `url` và `file`; cả hai hoặc không có đều trả 400.
+Ảnh, video và luồng **chỉ nhận link** — bên gọi đã lưu tệp ở đâu đó rồi, gửi lại
+toàn bộ byte chỉ là chuyển chúng đi hai lần. Tài liệu vẫn nhận cả tệp tải lên,
+vì PDF thường được giữ trước khi công bố nên chưa có link; với nó phải gửi đúng
+một trong hai, cả hai hoặc không có đều trả 400.
 Link trỏ vào địa chỉ nội bộ bị chặn trừ khi khai trong `ALLOW_HOSTS` — xem
 `RUN.md`.
 
