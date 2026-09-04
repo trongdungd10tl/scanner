@@ -111,52 +111,36 @@ curl -X POST http://localhost:8000/scan -F "file=@anh.jpg"
 
 `GET /health` trả trạng thái nạp mô hình.
 
-### Giới hạn đầu vào
+### Không có trần đầu vào
 
-| | Mặc định | Biến môi trường |
-|---|---|---|
-| Kích thước tệp | 10 MB | `MAX_FILE_BYTES` |
-| Số điểm ảnh | 24 triệu (6000×4000) | `MAX_PIXELS` |
+Dịch vụ nhận tệp **kích thước bất kỳ, số điểm ảnh bất kỳ**. Chỉ hai thứ bị từ
+chối: tệp rỗng, và thứ Pillow đọc không ra ảnh (cả hai trả **400**).
 
-Vượt trần trả **413**, không phải ảnh trả **400**.
+Đây là lựa chọn có chủ ý: chặn kích thước đã làm ở tầng CMS (`cms.upload.max-size`
+= 5MB), không lặp lại ở đây.
 
-**Phải có cả hai, thiếu cái nào cũng hở.** Trần kích thước chặn tệp 2GB làm đầy
-đĩa. Trần điểm ảnh chặn thứ mà trần kích thước bó tay: một PNG **252 KB** khai
-9000×9000 nở thành **231 MB RAM** khi giải nén — khuếch đại ~940 lần. Lá chắn
-sẵn có của Pillow **không bắt được** nó, vì 81 triệu điểm ảnh vẫn nằm dưới trần
-mặc định 89.478.485 của nó.
+**Điều kiện để lựa chọn đó đúng:** CMS phải là người gọi duy nhất. Hiện container
+công bố cổng ra `0.0.0.0` và `app.py` không kiểm tra người gọi, nên bất kỳ ai
+chung mạng đều gọi thẳng được, bỏ qua trần của CMS. Muốn giả định trên thành sự
+thật thì đổi compose:
 
-Trần 10MB cao hơn trần 5MB của CMS để câu thông báo tử tế của CMS thắng — cùng
-logic với khoảng cách 6MB/5MB trong `application.yml`.
+```yaml
+ports:
+  - "127.0.0.1:8000:8000"
+```
 
-Kiểm bằng `.venv/Scripts/python.exe kiem-tran.py` — chấm 6 trường hợp, gồm cả
-ảnh 4000×3000 thật phải **vào được** chứ không bị chặn nhầm.
+Hai rủi ro còn lại khi không có trần, để biết mà lường:
 
-### Chặn ở đâu, vì sao ở đó
+- Tệp lớn spool ra đĩa rồi `await file.read()` nạp hết vào RAM — máy này có
+  15.7GB RAM và 61.7GB đĩa trống
+- **Bom giải nén**: một PNG 252KB khai 9000×9000 đo được **231MB RAM**, khuếch
+  đại ~940 lần. Lá chắn sẵn có của Pillow không bắt được (81 triệu điểm ảnh vẫn
+  dưới trần mặc định 89.478.485 của nó)
 
-Hai tầng, không thay thế nhau:
+Muốn lấy lại trần thì revert commit *"feat: bound what the scanner will accept"* —
+code và test đều còn nguyên trong lịch sử.
 
-**Middleware** đọc `content-length` và từ chối trước khi Starlette chạm vào thân
-request. Cần tầng này vì tới lúc `scan()` chạy thì đã muộn — Starlette đọc xong
-thân request và đổ phần vượt 1MB ra tệp tạm trên đĩa rồi.
-
-**Đếm trong `_doc_co_tran`** mới là thứ thật sự chặn: `content-length` có thể
-thiếu (gửi kiểu chunked) hoặc khai láo.
-
-Trần điểm ảnh kiểm **giữa** `Image.open()` và `.convert()`. `open()` chỉ đọc
-phần đầu tệp để biết kích thước, chưa cấp phát điểm ảnh nào — đo được **0.10 ms**
-so với **202.88 ms** của `convert()`, rẻ hơn gần 2000 lần. Kiểm sau `convert()`
-thì RAM đã bị ngốn mất rồi, kiểm cũng vô nghĩa.
-
-### `nsfw_score` được tính thế nào
-
-Là **tổng** ba lớp không an toàn (`Hentai`, `Pornography`, `Enticing or Sensual`),
-không phải lớp cao nhất. Lý do: ảnh 0.4 `Pornography` + 0.4 `Hentai` đáng ngờ hơn
-nhiều so với 0.4 `Pornography` một mình — lấy giá trị lớn nhất sẽ coi hai trường
-hợp đó như nhau.
-
-`Anime Picture` **không** tính vào: nó chỉ mô tả phong cách vẽ, không nói gì về
-mức độ nhạy cảm.
+Kiểm phần còn lại bằng `.venv/Scripts/python.exe kiem-dau-vao.py`.
 
 ## Tốc độ đo được
 
