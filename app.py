@@ -1,59 +1,137 @@
 """
-Dich vu quet anh nhay cam cho Base CMS.
+NSFW scanning service for images, video, PDFs and HLS streams.
 
-Repo goc (PRITHIVSAKTHIUR/nsfw-image-detection) chi co mot demo Gradio, khong
-goi tu ung dung khac duoc. File nay boc cung mo hinh do thanh mot endpoint HTTP.
+Wraps the SigLIP2 model strangerguardhf/nsfw_image_detection behind HTTP. Video,
+documents and streams are reduced to still frames by media.py and scored frame
+by frame; every endpoint answers in its own response, with no job to poll for.
 
-Chay:
-    .venv/Scripts/python.exe -m uvicorn app:app --port 8000
+Staying synchronous is only honest because the work is bounded. Scoring one
+frame measured about 220ms, and media.py never yields more than MAX_FRAMES, so
+the slowest case is a predictable handful of seconds rather than an open-ended
+wait. Batching frames through the model measured only 1.2x faster, because torch
+already spreads a single image across every core, so frames are scored one at a
+time and the code stays simple.
 
-Goi:
-    curl -X POST http://localhost:8000/scan -F "file=@anh.jpg"
+Every caller gets its own key, and API_KEYS holds only their SHA-256 digests
+alongside a name, so no key appears in this repository or in any image built
+from it. Naming each caller is what makes a single leaked key revocable on its
+own, lets the log say who called without printing a key, and gives each caller a
+separate budget.
+
+Digests are compared with compare_digest rather than ==, which stops at the
+first differing character and so leaks, through response time, how much of a
+guess was right. The service refuses to start with no keys configured, because
+running unprotected looks exactly like running correctly.
+
+/health is deliberately left open: the container health check calls it, and it
+reveals nothing beyond whether the model finished loading.
 """
+import hashlib
+import hmac
 import io
 import logging
 import os
+import shutil
+import tempfile
 import time
+from collections import defaultdict, deque
 
 import torch
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from PIL import Image
 from transformers import AutoImageProcessor, SiglipForImageClassification
+
+import media
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("nsfw")
 
-# Uu tien thu muc da tai san; khong co thi keo tu HuggingFace.
-DUONG_DAN_MO_HINH = os.getenv("MODEL_PATH", "models/nsfw-image-detection")
-TEN_TREN_HUB = "strangerguardhf/nsfw_image_detection"
+MODEL_PATH = os.getenv("MODEL_PATH", "models/nsfw-image-detection")
+HUB_NAME = "strangerguardhf/nsfw_image_detection"
+UNSAFE_LABELS = {"Hentai", "Pornography", "Enticing or Sensual"}
+RATE_LIMIT = int(os.getenv("RATE_LIMIT_PER_MINUTE", "300"))
 
-# Nhung nhan bi coi la khong an toan. "Anime Picture" KHONG nam trong day: no
-# chi mo ta phong cach ve, khong noi gi ve muc do nhay cam.
-NHAN_KHONG_AN_TOAN = {"Hentai", "Pornography", "Enticing or Sensual"}
-
-app = FastAPI(title="NSFW scanner cho Base CMS")
+app = FastAPI(title="NSFW scanner")
 
 _processor = None
 _model = None
+_recent = defaultdict(deque)
 
 
-def _nap_mo_hinh():
-    """Nap mot lan, giu trong bo nho. Nap moi lan goi se mat vai giay/anh."""
+def _parse_keys(raw):
+    keys = {}
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        name, _, digest = entry.partition(":")
+        name, digest = name.strip(), digest.strip().lower()
+        if not name or len(digest) != 64:
+            raise RuntimeError(
+                "API_KEYS entry " + repr(entry) + " is not name:<64 character "
+                "sha256>. Generate one with: python issue_key.py NAME"
+            )
+        keys[digest] = name
+    return keys
+
+
+API_KEYS = _parse_keys(os.getenv("API_KEYS", ""))
+
+
+def _identify(provided):
+    if not provided:
+        raise HTTPException(status_code=401, detail="Missing X-API-Key header")
+    digest = hashlib.sha256(provided.encode("utf-8")).hexdigest()
+    for known, name in API_KEYS.items():
+        if hmac.compare_digest(digest, known):
+            return name
+    raise HTTPException(status_code=403, detail="Invalid API key")
+
+
+def _charge(name, units=1):
+    """
+    Bills a caller in frames, not requests.
+
+    A video costs as much CPU as the frames it yields, so charging it as one
+    request would let a caller spend the whole budget many times over by
+    wrapping images in a video container. The media endpoints charge once to be
+    let in, then again for the frames they actually produced, before any of
+    those frames is scored.
+    """
+    now = time.monotonic()
+    window = _recent[name]
+    while window and now - window[0] > 60:
+        window.popleft()
+    if len(window) + units > RATE_LIMIT:
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit of " + str(RATE_LIMIT) + " frames per minute exceeded",
+        )
+    window.extend([now] * units)
+
+
+def _load_model():
     global _processor, _model
     if _model is not None:
         return
-
-    nguon = DUONG_DAN_MO_HINH if os.path.isdir(DUONG_DAN_MO_HINH) else TEN_TREN_HUB
-    log.info("Nap mo hinh tu %s", nguon)
-    _processor = AutoImageProcessor.from_pretrained(nguon)
-    _model = SiglipForImageClassification.from_pretrained(nguon)
+    source = MODEL_PATH if os.path.isdir(MODEL_PATH) else HUB_NAME
+    log.info("Loading model from %s", source)
+    _processor = AutoImageProcessor.from_pretrained(source)
+    _model = SiglipForImageClassification.from_pretrained(source)
     _model.eval()
-    log.info("San sang. Cac lop: %s", _model.config.id2label)
+    log.info("Ready. Labels: %s", _model.config.id2label)
 
 
 @app.on_event("startup")
-def khoi_dong():
-    _nap_mo_hinh()
+def startup():
+    if not API_KEYS:
+        raise RuntimeError(
+            "API_KEYS is empty. Set it to name:sha256 entries separated by "
+            "commas. Generate one with: python issue_key.py NAME"
+        )
+    log.info("Callers: %s, %d frames per minute each",
+             sorted(API_KEYS.values()), RATE_LIMIT)
+    _load_model()
 
 
 @app.get("/health")
@@ -61,41 +139,159 @@ def health():
     return {"status": "ok", "model_loaded": _model is not None}
 
 
-@app.post("/scan")
-async def scan(file: UploadFile = File(...)):
-    """
-    Cham diem mot anh.
-
-    Tra ve diem tung lop, cong them mot con so gop `nsfw_score` de ben goi chi
-    viec so voi nguong cua minh. Diem gop la TONG cua ba lop khong an toan chu
-    khong phai lop cao nhat: mot anh 0.4 Pornography + 0.4 Hentai dang ngo hon
-    nhieu so voi 0.4 Pornography mot minh.
-    """
-    _nap_mo_hinh()
-
-    du_lieu = await file.read()
-    if not du_lieu:
-        raise HTTPException(status_code=400, detail="Tep rong")
-
-    try:
-        anh = Image.open(io.BytesIO(du_lieu)).convert("RGB")
-    except Exception:
-        # Doc khong ra anh thi tu choi, khong doan theo Content-Type.
-        raise HTTPException(status_code=400, detail="Khong phai anh")
-
-    bat_dau = time.perf_counter()
-    dau_vao = _processor(images=anh, return_tensors="pt")
+def _score(image):
+    inputs = _processor(images=image, return_tensors="pt")
     with torch.no_grad():
-        logits = _model(**dau_vao).logits
-        xac_suat = torch.nn.functional.softmax(logits, dim=1).squeeze().tolist()
-
+        logits = _model(**inputs).logits
+        probs = torch.nn.functional.softmax(logits, dim=1).squeeze().tolist()
     id2label = _model.config.id2label
-    diem = {id2label[i]: round(float(xac_suat[i]), 4) for i in range(len(xac_suat))}
-    nhan_cao_nhat = max(diem, key=diem.get)
+    scores = {id2label[i]: round(float(probs[i]), 4) for i in range(len(probs))}
+    return scores, round(sum(v for k, v in scores.items() if k in UNSAFE_LABELS), 4)
 
+
+def _open(data):
+    try:
+        return Image.open(io.BytesIO(data)).convert("RGB")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Not an image")
+
+
+def _worst_of(frames):
+    """
+    Reports the single most explicit frame rather than an average.
+
+    One explicit second inside an hour of harmless footage is exactly what this
+    is meant to catch, and an average would bury it.
+    """
+    worst_scores, worst_nsfw, worst_marker = None, -1.0, None
+    for marker, path in frames:
+        with Image.open(path) as frame:
+            scores, nsfw = _score(frame.convert("RGB"))
+        if nsfw > worst_nsfw:
+            worst_scores, worst_nsfw, worst_marker = scores, nsfw, marker
+    return worst_scores, worst_nsfw, worst_marker
+
+
+def _reply(kind, scores, nsfw, count, worst, started):
     return {
-        "label": nhan_cao_nhat,
-        "scores": diem,
-        "nsfw_score": round(sum(v for k, v in diem.items() if k in NHAN_KHONG_AN_TOAN), 4),
-        "took_ms": round((time.perf_counter() - bat_dau) * 1000, 1),
+        "type": kind,
+        "label": max(scores, key=scores.get),
+        "scores": scores,
+        "nsfw_score": nsfw,
+        "frames_scanned": count,
+        "worst_at": worst,
+        "took_ms": round((time.perf_counter() - started) * 1000, 1),
     }
+
+
+async def _spool(upload):
+    """Streams an upload to disk. A video is too large to hold in memory."""
+    handle, path = tempfile.mkstemp(suffix=os.path.splitext(upload.filename or "")[1])
+    with os.fdopen(handle, "wb") as target:
+        while True:
+            chunk = await upload.read(1024 * 1024)
+            if not chunk:
+                break
+            target.write(chunk)
+    return path
+
+
+def _discard(*paths):
+    for path in paths:
+        if not path:
+            continue
+        if os.path.isdir(path):
+            shutil.rmtree(path, ignore_errors=True)
+        else:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
+def _scan_frames(caller, kind, frames, label, started):
+    _charge(caller, len(frames))
+    scores, nsfw, worst = _worst_of(frames)
+    reply = _reply(kind, scores, nsfw, len(frames), worst, started)
+    log.info("%s %s %s -> %s nsfw=%.4f over %d frames",
+             caller, kind, label, reply["label"], nsfw, len(frames))
+    return reply
+
+
+@app.post("/scan")
+async def scan_image(file: UploadFile = File(...), x_api_key: str = Header(default="")):
+    caller = _identify(x_api_key)
+    _charge(caller)
+    _load_model()
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    started = time.perf_counter()
+    scores, nsfw = _score(_open(data))
+    reply = _reply("image", scores, nsfw, 1, None, started)
+    log.info("%s image %s -> %s nsfw=%.4f", caller, file.filename, reply["label"], nsfw)
+    return reply
+
+
+@app.post("/scan/video")
+async def scan_video(file: UploadFile = File(...), x_api_key: str = Header(default="")):
+    caller = _identify(x_api_key)
+    _charge(caller)
+    _load_model()
+
+    source = await _spool(file)
+    folder = None
+    try:
+        started = time.perf_counter()
+        try:
+            frames = media.video_frames(source)
+        except media.MediaError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        folder = os.path.dirname(frames[0][1])
+        return _scan_frames(caller, "video", frames, file.filename, started)
+    finally:
+        _discard(source, folder)
+
+
+@app.post("/scan/document")
+async def scan_document(file: UploadFile = File(...), x_api_key: str = Header(default="")):
+    caller = _identify(x_api_key)
+    _charge(caller)
+    _load_model()
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    folder = None
+    try:
+        started = time.perf_counter()
+        try:
+            pages = media.pdf_pages(data)
+        except media.MediaError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        folder = os.path.dirname(pages[0][1])
+        return _scan_frames(caller, "document", pages, file.filename, started)
+    finally:
+        _discard(folder)
+
+
+@app.post("/scan/hls")
+async def scan_hls(url: str = Form(...), x_api_key: str = Header(default="")):
+    caller = _identify(x_api_key)
+    _charge(caller)
+    _load_model()
+
+    folder = None
+    try:
+        started = time.perf_counter()
+        try:
+            frames = media.hls_frames(url)
+        except media.MediaError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        folder = os.path.dirname(frames[0][1])
+        return _scan_frames(caller, "hls", frames, url, started)
+    finally:
+        _discard(folder)

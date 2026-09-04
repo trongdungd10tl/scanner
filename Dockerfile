@@ -1,43 +1,54 @@
-# Dich vu quet anh nhay cam.
+# Builds a self-contained image for the NSFW scanning service. The model
+# weights are downloaded during the build, so a copy of this directory on a new
+# server needs one command and no network access at run time.
 #
-# Cong thuc nay lam MOT LAN nhung buoc ma cai bang tay se vap: chon dung ban
-# torch CPU, keo theo torchvision, va nho python-multipart cho viec nhan tep.
-#
-# Trong so mo hinh (354MB) KHONG nam trong image. Gan tu ngoai vao bang volume
-# - giong cach MySQL cua du an giu du lieu ngoai image. Nho vay image gon, va
-# doi mo hinh khac chi can thay thu muc chu khong phai build lai.
+# Step order is deliberate. Docker discards every cached layer below the first
+# one that changes, so the slow, rarely edited installs come first: on this
+# machine they measured 564s for apt, 1163s for the Python packages and 296s to
+# fetch the weights. That is also why the media dependencies sit in their own
+# requirements file installed further down. Folding them into requirements.txt
+# would move the edit above the weights layer and turn a two minute rebuild into
+# a thirty minute one every time one of them changes.
 FROM python:3.11-slim
-
-# Khi lam video: bo dau # o dong duoi la ca image co ffmpeg, khong may nao phai
-# tu cai. Gio chua dung nen khong keo vao cho nang.
-# RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
-#     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Torch phai lay tu chi muc CPU. Khong chi ro thi pip keo ban CUDA ~2.5GB, vo
-# ich voi may khong co GPU va lam image phinh gap doi.
 RUN pip install --no-cache-dir \
         torch torchvision \
         --index-url https://download.pytorch.org/whl/cpu
 
-# Chep requirements truoc code: Docker giu lai lop nay khi chi co code doi, nen
-# sua app.py khong phai cai lai toan bo thu vien.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py .
+# The sed strips carriage returns. A checkout on Windows turns the script's line
+# endings into CRLF, and bash then fails on every line with "\r: command not
+# found" -- a copy of this directory made on Windows would otherwise not build
+# on a Linux server.
+COPY download_file.sh download_model.sh ./
+RUN sed -i 's/\r$//' download_file.sh download_model.sh && bash download_model.sh
 
-# Khong chay bang root. Container bi chiem thi ke tan cong cung chi la mot tai
-# khoan thuong.
-RUN useradd --create-home --uid 10001 quet && chown -R quet:quet /app
-USER quet
+# A static ffmpeg rather than apt's. The package wants 130MB to fetch and adds
+# 455MB to the image, because it drags in the whole desktop media stack to
+# satisfy its dependencies; this archive is 42MB and self-contained.
+COPY download_ffmpeg.sh .
+RUN sed -i 's/\r$//' download_ffmpeg.sh && bash download_ffmpeg.sh \
+    && mv bin/ffmpeg bin/ffprobe /usr/local/bin/ && rmdir bin
+
+COPY requirements-media.txt .
+RUN pip install --no-cache-dir -r requirements-media.txt
+
+COPY app.py media.py ./
+
+RUN useradd --create-home --uid 10001 scanner && chown -R scanner:scanner /app
+USER scanner
 
 ENV MODEL_PATH=/app/models/nsfw-image-detection
 EXPOSE 8000
 
-# Nap mo hinh mat vai giay, nen start-period rong tay de Docker khong bao
-# unhealthy trong luc no dang khoi dong.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
     CMD python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=4)"
 

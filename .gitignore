@@ -1,4 +1,5 @@
-# Moi truong ao va trong so mo hinh - hang tram MB, tai lai bang tai-mo-hinh.py
 .venv/
 models/
 __pycache__/
+bin/
+build.log

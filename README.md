@@ -1,101 +1,48 @@
 # Dịch vụ quét ảnh nhạy cảm
 
 Bọc mô hình [nsfw-image-detection](https://github.com/PRITHIVSAKTHIUR/nsfw-image-detection)
-(SigLIP2, Apache-2.0) thành một endpoint HTTP để Base CMS gọi được.
+(SigLIP2, Apache-2.0) thành một endpoint HTTP để ứng dụng khác gọi được.
 
-Repo gốc chỉ có demo Gradio, không gọi từ ứng dụng khác được — `app.py` ở đây là
-phần bọc.
+Repo gốc chỉ có demo Gradio — dựng ra một trang cho người ngồi kéo thả ảnh, không
+phải API. `app.py` ở đây là phần bọc còn thiếu.
 
-## Chạy bằng Docker (khuyên dùng)
+**Cách chạy: xem [RUN.md](RUN.md).** Tệp này nói về những gì mô hình làm được,
+làm chưa được, và những chỗ đã vấp.
 
-```bash
-bash tai-song-song.sh            # một lần: tải trọng số về ./models
-docker compose up -d --build     # lần đầu build vài phút
-```
+## Các tệp
 
-Kiểm: <http://localhost:8000/docs>
-
-Trọng số **không nằm trong image** — gắn từ ngoài vào bằng volume, chỉ đọc.
-Giống cách MySQL của dự án giữ dữ liệu ngoài image: image gọn, và đổi mô hình
-khác chỉ cần thay thư mục `models/` chứ không phải build lại.
-
-Khi làm video, bỏ dấu `#` ở dòng `ffmpeg` trong `Dockerfile` là xong — không máy
-nào phải tự cài.
-
-Số liệu đo được sau khi build:
-
-| | |
+| Tệp | Vai trò |
 |---|---|
-| Kích thước image | **1.77 GB** (phần lớn là torch) |
-| Thời gian build lần đầu | ~3,5 phút |
-| Chấm điểm | ~2000 ms/ảnh — ngang bản venv |
-| Chạy bằng | tài khoản `quet` uid 10001, không phải root |
-
-Điểm chấm trong container **giống hệt** bản chạy venv, nên đóng gói không làm
-lệch kết quả.
-
-| | |
-|---|---|
-| `docker compose logs -f` | xem log |
-| `docker compose down` | tắt |
-| `docker compose up -d --build` | build lại sau khi sửa `app.py` |
-
-## Chạy bằng venv (khi đang sửa code)
-
-Sửa `app.py` xong không phải build lại image, chạy thẳng cho nhanh.
-
-
-
-```bash
-# Lần đầu
-python -m venv .venv
-.venv/Scripts/python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-.venv/Scripts/python.exe -m pip install -r requirements.txt
-.venv/Scripts/python.exe tai-mo-hinh.py      # tải trọng số về ./models
-
-# Mỗi lần
-.venv/Scripts/python.exe -m uvicorn app:app --port 8000
-```
-
-Kiểm nhanh: `.venv/Scripts/python.exe kiem-thu.py`
-
-## Thử nhanh với ảnh của bạn
-
-**Cách dễ nhất — qua trình duyệt.** FastAPI dựng sẵn giao diện thử:
-
-<http://127.0.0.1:8000/docs> → chọn `POST /scan` → *Try it out* → *Choose File* →
-*Execute*. Kết quả JSON hiện ngay bên dưới.
-
-**Qua dòng lệnh**, có biểu đồ cho dễ đọc:
-
-```bash
-.venv/Scripts/python.exe quet.py "D:nh-cua-toi.jpg"
-```
-
-```
-anh-cua-toi.jpg  (44 KB, image/jpeg)
-
-  Normal                 0.9097  ####################################
-  Enticing or Sensual    0.0608  ##
-  Anime Picture          0.0247  #
-  Hentai                 0.0032
-  Pornography            0.0016
-
-  ket luan   : Normal
-  nsfw_score : 0.0656
-  thoi gian  : 1917.4 ms
-```
-
-Quét dịch vụ ở máy khác thì đặt `SCANNER_URL`.
+| `app.py` | dịch vụ: bốn endpoint, xác thực, hạn mức |
+| `media.py` | biến video, luồng HLS và PDF thành các khung ảnh |
+| `Dockerfile`, `docker-compose.yml` | đóng gói |
+| `requirements.txt` | phụ thuộc lõi |
+| `requirements-media.txt` | phụ thuộc cho video/PDF, tách riêng vì lý do đệm Docker |
+| `download_model.sh` | tải trọng số, 8 kết nối song song |
+| `download_ffmpeg.sh` | tải ffmpeg + ffprobe bản static vào `bin/` |
+| `download_file.sh` | hàm tải dùng chung: 8 kết nối song song, nối tiếp được |
+| `download_model_hf.py` | cách tải thay thế, một kết nối |
+| `scan.py` | quét một ảnh từ dòng lệnh |
+| `issue_key.py` | cấp khoá cho một bên gọi |
+| `smoke_test.py` | xác nhận dịch vụ còn sống |
+| `test_input.py` | kiểm cách xử lý đầu vào |
 
 ## API
 
-```bash
-curl -X POST http://localhost:8000/scan -F "file=@anh.jpg"
-```
+Bốn endpoint, tất cả nhận `multipart/form-data`:
+
+| | Trường | Nhận |
+|---|---|---|
+| `POST /scan` | `file` | ảnh |
+| `POST /scan/video` | `file` | tệp video |
+| `POST /scan/document` | `file` | PDF |
+| `POST /scan/hls` | `url` | địa chỉ luồng `.m3u8` |
+
+Cả bốn trả **cùng một hình dạng**, nên bên gọi chỉ cần một hàm đọc:
 
 ```json
 {
+  "type": "video",
   "label": "Normal",
   "scores": {
     "Anime Picture": 0.0121,
@@ -105,58 +52,82 @@ curl -X POST http://localhost:8000/scan -F "file=@anh.jpg"
     "Enticing or Sensual": 0.0135
   },
   "nsfw_score": 0.0267,
-  "took_ms": 184.2
+  "frames_scanned": 60,
+  "worst_at": 128.5,
+  "took_ms": 10549.3
 }
 ```
 
-`GET /health` trả trạng thái nạp mô hình.
+`nsfw_score` và `scores` lấy theo **khung tệ nhất**, không phải trung bình. Một
+giây phản cảm giữa một tiếng phim vô hại chính là thứ cần bắt, mà trung bình thì
+nó chìm nghỉm. `worst_at` là giây (video, hls) hoặc số trang (tài liệu), và
+`null` với ảnh.
 
-### Không có trần đầu vào
+Chi tiết cách gọi, trần lấy mẫu và chốt chặn SSRF: xem `RUN.md`.
 
-Dịch vụ nhận tệp **kích thước bất kỳ, số điểm ảnh bất kỳ**. Chỉ hai thứ bị từ
-chối: tệp rỗng, và thứ Pillow đọc không ra ảnh (cả hai trả **400**).
+`GET /health` trả trạng thái nạp mô hình, không cần khoá.
 
-Đây là lựa chọn có chủ ý: chặn kích thước đã làm ở tầng CMS (`cms.upload.max-size`
-= 5MB), không lặp lại ở đây.
+### Xác thực và hạn mức
 
-**Điều kiện để lựa chọn đó đúng:** CMS phải là người gọi duy nhất. Hiện container
-công bố cổng ra `0.0.0.0` và `app.py` không kiểm tra người gọi, nên bất kỳ ai
-chung mạng đều gọi thẳng được, bỏ qua trần của CMS. Muốn giả định trên thành sự
-thật thì đổi compose:
+`/scan` đòi header `X-API-Key`. Thiếu trả **401**, sai trả **403**, vượt hạn mức
+trả **429**.
 
-```yaml
-ports:
-  - "127.0.0.1:8000:8000"
-```
+Mỗi bên gọi một khoá riêng; `API_KEYS` chỉ giữ **băm SHA-256 kèm tên**, nên không
+khoá nào có mặt trong repo lẫn trong image. Bốn lựa chọn đi kèm:
 
-Hai rủi ro còn lại khi không có trần, để biết mà lường:
+- **Đặt tên từng bên gọi.** Nhờ đó thu hồi được một bên mà không đụng các bên
+  khác, log ghi được ai gọi mà không phải in khoá ra, và mỗi bên có hạn mức riêng.
+- **Hạn mức tính riêng từng khoá, và đếm theo khung chứ không theo lời gọi.**
+  Một khung tốn ~220ms CPU, nên một bên gửi đều đặn là làm nghẽn mọi bên khác dù
+  không cố ý. Nếu đếm theo lời gọi thì gói 60 ảnh vào một tệp video là tiêu 60
+  lần ngân sách mà chỉ mất một lượt.
+- **So sánh bằng `hmac.compare_digest`**, không phải `==`. So sánh chuỗi thường
+  dừng ngay tại ký tự đầu tiên khác nhau, nên thời gian trả lời hé lộ đoán đúng
+  được bao nhiêu ký tự đầu.
+- **Không khởi động nếu chưa có khoá nào.** Chạy hở là trạng thái nguy hiểm mà
+  trông y hệt lúc chạy đúng.
 
-- Tệp lớn spool ra đĩa rồi `await file.read()` nạp hết vào RAM — máy này có
-  15.7GB RAM và 61.7GB đĩa trống
-- **Bom giải nén**: một PNG 252KB khai 9000×9000 đo được **231MB RAM**, khuếch
-  đại ~940 lần. Lá chắn sẵn có của Pillow không bắt được (81 triệu điểm ảnh vẫn
-  dưới trần mặc định 89.478.485 của nó)
-
-Muốn lấy lại trần thì revert commit *"feat: bound what the scanner will accept"* —
-code và test đều còn nguyên trong lịch sử.
-
-Kiểm phần còn lại bằng `.venv/Scripts/python.exe kiem-dau-vao.py`.
+Khoá vẫn đi qua mạng ở dạng rõ, nên ra khỏi mạng nội bộ thì phải có TLS — xem mục
+"Chạy sau HTTPS" trong `RUN.md`.
 
 ## Tốc độ đo được
 
-Đo trên máy này (CPU, không GPU), ảnh 512×512:
+CPU 16 nhân, không GPU. Hâm nóng trước rồi đo 4 lần mỗi cỡ:
 
-| | |
+| Cỡ ảnh | Thời gian |
 |---|---|
-| Lần gọi đầu | ~1200 ms (gồm khởi động) |
-| Ổn định | **~950–1100 ms/ảnh** |
-| Nạp mô hình lúc khởi động | vài giây, một lần |
+| 512×512 | 228 ms |
+| 640×360 | 218 ms |
+| 1920×1080 | 214 ms |
+| 4000×3000 | 227 ms |
 
-Con số này quyết định kiến trúc: **~1 giây/ảnh là quá chậm để quét đồng bộ lúc
-tải lên**. Người dùng sẽ thấy nút "Tải lên" treo cả giây. Phải quét nền.
+**~220 ms/ảnh, và không phụ thuộc kích thước ảnh** — bộ tiền xử lý co mọi ảnh về
+256×256 trước khi chấm, nên ảnh 12 triệu điểm ảnh cũng tốn đúng bằng ảnh nhỏ.
 
-Để so sánh, NudeNet công bố ~142 ms/ảnh — nhanh hơn khoảng 7 lần, vì mô hình
-của nó ~7MB còn mô hình này ~354MB.
+Trong container đo được 146 ms, tức đóng gói không làm chậm đi.
+
+> Bản trước của tệp này ghi ~950–1100 ms. Con số đó **sai** — nó đến từ những
+> phép đo đơn lẻ không hâm nóng trước, nên gánh cả chi phí khởi tạo lần đầu.
+> Sai lệch 4–5 lần, và nó từng dẫn tới kết luận sai là phải quét nền.
+
+Gộp nhiều khung vào một lượt gọi chỉ nhanh hơn **1.2 lần** (8 khung: 1120ms so
+với 957ms), vì torch đã trải một ảnh ra 10 luồng nên CPU gần như đã bão hoà.
+Không đáng đánh đổi lấy phức tạp, nên các khung được chấm tuần tự.
+
+Đo qua HTTP trong container, video 2 phút:
+
+```
+frames_scanned  60
+took_ms         10549.3      -> ~176 ms/khung
+```
+
+Mốc thời gian đã được đối chiếu với nội dung thật: một video 120 giây gồm 6 khối
+màu mỗi khối 20 giây cho ra đúng mốc đổi màu tại **0, 20, 40, 60, 80, 100** giây.
+`media.py` tính mốc bằng số học (`khung thứ i × khoảng lấy mẫu`) thay vì đọc
+metadata của ffmpeg, và phép đo này xác nhận cách đó đúng.
+
+Để so sánh, NudeNet công bố ~142 ms/ảnh — vẫn nhanh hơn, nhưng khoảng cách là
+1.5 lần chứ không phải 7 lần như tôi từng viết.
 
 ## Ngưỡng
 
@@ -172,54 +143,82 @@ chính nền tảng bạn. Điểm khởi đầu để đo:
 Mô hình công bố độ chính xác 91,37% — nghĩa là **cứ 11 ảnh thì sai 1**. Điểm số
 dùng để **sắp xếp** hàng đợi, không phải để tự động công bố hay xoá thay người.
 
-## Dừng dịch vụ
-
-Chạy bằng Docker: `docker compose down`
-
-Chạy bằng venv:
-
-```bash
-powershell -Command "Get-NetTCPConnection -LocalPort 8000 -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }"
-```
-
-**Đừng chạy cả hai cùng lúc.** Windows cho phép venv giữ `127.0.0.1:8000` trong
-khi container giữ `0.0.0.0:8000`, không báo lỗi gì — nhưng request tới
-`localhost` sẽ vào bản venv vì nó khớp cụ thể hơn. Sửa code rồi tưởng đang test
-container mà thật ra đang test bản cũ.
-
 ## Giới hạn
 
-- **Chỉ nội dung khiêu dâm/gợi dục.** Bạo lực, vũ khí, ma tuý, tự hại — không có.
+Đo được, không phải phỏng đoán:
+
+- **Nó luôn trả lời, kể cả khi không có gì để trả lời.** Nhiễu ngẫu nhiên được
+  chấm `Normal` 97.9%; ảnh 1×1 điểm được chấm `Normal` 93.6%. Softmax luôn cộng
+  lại bằng 1 nên mô hình buộc phải dồn hết vào một nhãn. Điểm cao **không** có
+  nghĩa là mô hình chắc chắn.
+- **Chỉ nội dung khiêu dâm/gợi dục.** Bạo lực, vũ khí, ma tuý, tự hại — không có
+  nhãn nào. Ảnh vũ khí sẽ được chấm `Normal` vì không có ô nào khác để bỏ vào.
 - **Không phủ CSAM.** Đó là hạng mục riêng, xem `docs/KIEM-DUYET-NOI-DUNG.md`.
-- **Chỉ ảnh.** Video phải tách khung bằng `ffmpeg` rồi gửi từng khung — và ở
-  ~1 giây/khung thì một video 3 phút lấy 1 khung/giây mất khoảng 3 phút để quét.
-- **Chỉ nhận ảnh raster.** SVG bị từ chối (Pillow không đọc được) — trùng với
-  giới hạn của chính luồng tải lên trong CMS.
+- **GIF và WebP động chỉ được quét khung đầu tiên.** Đã kiểm: gửi GIF có khung 0
+  màu đen và các khung sau màu đỏ, dịch vụ chỉ thấy khung đen. Nội dung ở khung
+  sau lọt hoàn toàn.
+- **Không áp dụng EXIF Orientation.** Điện thoại chụp ảnh dọc thì lưu ảnh ngang
+  kèm cờ xoay; dịch vụ bỏ qua cờ đó nên **quét ảnh ở tư thế nằm nghiêng**.
+- **Video và HLS chỉ được lấy mẫu, không xem hết.** Tối đa 60 khung cho mọi độ
+  dài, và luồng trực tiếp bị cắt sau 60 giây. Nội dung phản cảm lọt giữa hai
+  khung lấy mẫu sẽ **không bị phát hiện** — video càng dài, khe càng rộng.
+- **Tài liệu chỉ đọc phần nhìn thấy được.** Trang PDF được vẽ ra thành ảnh rồi
+  chấm, nên chữ nghĩa hoàn toàn bị bỏ qua. Chỉ nhận PDF; Word, Excel, PowerPoint
+  không đọc được.
+- **Chỉ ảnh raster.** SVG bị từ chối.
+- **Định dạng không ảnh hưởng kết quả.** PNG, GIF, BMP, TIFF, WebP cho điểm giống
+  hệt nhau; JPEG lệch 0.0001 do nén mất. Chuyển đổi định dạng trước khi quét là
+  vô ích — `.convert("RGB")` đã chuẩn hoá tất cả về điểm ảnh thô rồi.
 
 ## Chưa kiểm được
 
-Tôi mới xác nhận **đường ống chạy thông**: nạp mô hình, nhận tệp, trả JSON đúng
-nhãn. **Chưa đánh giá được độ chính xác** — chỉ mới đưa vào ảnh màu trơn sinh
-tại chỗ, thứ không nói lên điều gì về khả năng phán đoán của mô hình.
+Mới xác nhận **đường ống chạy thông**: nạp mô hình, nhận tệp, trả JSON đúng nhãn.
+**Chưa đánh giá được độ chính xác** — mới chỉ đưa vào ảnh sinh tại chỗ, thứ không
+nói lên điều gì về khả năng phán đoán.
 
-Trước khi tin vào ngưỡng nào, hãy chạy thử trên một tập ảnh thật của chính nền
-tảng bạn.
+Trước khi tin vào ngưỡng nào, hãy chấm 200–300 ảnh thật của chính nền tảng bạn,
+tự dán nhãn, rồi xem điểm cắt ở đâu là hợp.
+
+## ffmpeg
+
+`media.py` gọi `ffprobe` để lấy độ dài rồi `ffmpeg` để trích khung. Cả hai nằm
+**trong image**, tải lúc build bởi `download_ffmpeg.sh` — không phải cài gì thêm
+trên server.
+
+Dùng bản **static** thay vì gói của apt vì đo được:
+
+| | Tải về | Chiếm thêm trong image |
+|---|---|---|
+| `apt-get install ffmpeg` | 130 MB | **455 MB** |
+| Bản static | **42 MB** | ~80 MB |
+
+Gói của apt kéo theo cả bộ thư viện đa phương tiện của máy để bàn để thoả mãn
+phụ thuộc, dù dịch vụ này chỉ cần hai tệp nhị phân.
+
+Script giải nén bằng Python thay vì `tar`, vì `tar` cần thêm gói `xz-utils` —
+mà thêm gói đó vào lớp apt phía trên sẽ **xoá mất lớp đệm chứa 354MB trọng số**
+nằm bên dưới.
 
 ## Ghi chú khi cài
 
 Tên mô hình trên HuggingFace là **`strangerguardhf/nsfw_image_detection`**.
-README của repo GitHub ghi là `prithivMLmods/...` — định danh đó **không tồn
-tại**, tải sẽ báo lỗi. Tên đúng nằm trong `app.py` của chính repo đó.
+README của repo GitHub ghi là `prithivMLmods/...` — định danh đó **không tồn tại**,
+tải sẽ báo lỗi. Tên đúng nằm trong `app.py` của chính repo đó.
 
 Cài `torch` phải chỉ rõ `--index-url .../whl/cpu`, nếu không pip kéo bản CUDA
-khoảng 2.5GB mà máy không có GPU thì cũng không dùng được.
+khoảng 2.5GB mà máy không có GPU cũng không dùng được.
 
-`transformers` cần thêm `torchvision` cho `AutoImageProcessor`, dù mình không
-gọi trực tiếp gói đó.
+`transformers` cần thêm `torchvision` cho `AutoImageProcessor`, dù không gọi
+trực tiếp gói đó.
+
+HuggingFace bóp tốc độ **từng kết nối** (~110 KB/s), không phải băng thông tổng.
+Vì vậy `download_model.sh` chia làm 8 phần — đo được ~1.1 MB/s. Và `curl --retry`
+**không** nối lại từ chỗ đứt, nên mỗi phần phải tự chạy vòng lặp xin phần còn
+thiếu; lần đầu không làm vậy đã ghép ra một tệp thiếu 134MB.
 
 ## Nối vào CMS
 
 Xem `docs/KIEM-DUYET-NOI-DUNG.md` mục 6. Tóm tắt: viết một lớp hiện thực
-`ContentScanner` gọi `POST /scan` của dịch vụ này, và **thay resource handler
-tĩnh `/files/**` bằng controller kiểm trạng thái** — không có bước sau thì việc
-kiểm duyệt không có tác dụng gì.
+`ContentScanner` gọi `POST /scan`, và **thay resource handler tĩnh `/files/**`
+bằng controller kiểm trạng thái** — không có bước sau thì việc kiểm duyệt không
+có tác dụng gì.

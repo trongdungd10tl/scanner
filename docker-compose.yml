@@ -1,11 +1,13 @@
-# Dich vu quet anh nhay cam.
+# Starts the NSFW scanning service on port 8000. Everything it needs, model
+# weights included, is inside the image, so there is nothing to prepare first.
 #
-#   docker compose up -d --build     bat (lan dau se build, mat vai phut)
-#   docker compose logs -f           xem log
-#   docker compose down              tat
+# API_KEYS lists each caller as name:sha256-of-their-key, comma separated. Only
+# the digests live here; each key is handed to its caller out of band. Issue one
+# with: python issue_key.py NAME
 #
-# TRUOC KHI CHAY LAN DAU phai co trong so mo hinh trong ./models:
-#   bash tai-song-song.sh
+# Removing a caller's entry revokes that caller alone. RATE_LIMIT_PER_MINUTE
+# applies to each caller separately, which matters because one scan costs about
+# a second of CPU.
 services:
   scanner:
     build: .
@@ -13,6 +15,6 @@ services:
     restart: unless-stopped
     ports:
       - "8000:8000"
-    volumes:
-      # Chi doc: container khong co ly do gi de sua trong so mo hinh.
-      - ./models:/app/models:ro
+    environment:
+      API_KEYS: ${API_KEYS:-cms:a160b94cb17c13846d2faa495a48a290fb739de238a3c1374dfe834b6e586690}
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-300}

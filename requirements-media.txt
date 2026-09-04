@@ -1,0 +1,4 @@
+# Dependencies for the video, stream and PDF endpoints. Kept apart from
+# requirements.txt so that adding one does not invalidate the Docker layer
+# holding the 354MB model download; see the note in the Dockerfile.
+pymupdf>=1.24
