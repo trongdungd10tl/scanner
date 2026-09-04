@@ -23,3 +23,9 @@ services:
     environment:
       API_KEYS: ${API_KEYS:-cms:a160b94cb17c13846d2faa495a48a290fb739de238a3c1374dfe834b6e586690}
       RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-300}
+      # Hosts the scanner may fetch from even though they resolve to a private
+      # address. The application sending links usually sits on one, and without
+      # naming it the check that stops the scanner being an open proxy also
+      # stops it reading what the caller owns. List only what is needed:
+      #   ALLOW_HOSTS=cms.internal,192.168.1.10
+      ALLOW_HOSTS: ${ALLOW_HOSTS:-}

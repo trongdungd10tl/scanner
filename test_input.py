@@ -29,6 +29,11 @@ def digest(value):
 
 os.environ["API_KEYS"] = "cms:%s,partnerA:%s" % (digest(CMS_KEY), digest(PARTNER_KEY))
 os.environ["RATE_LIMIT_PER_MINUTE"] = "6"
+# Cleared deliberately. With a host allowed, the loopback cases below still
+# return 400, but from failing to connect rather than from the check under
+# test -- green for the wrong reason, which is how a broken endpoint stayed
+# hidden here once already.
+os.environ["ALLOW_HOSTS"] = ""
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -63,6 +68,11 @@ def pdf(pages=3):
 def post(path, name, content, mime="image/jpeg", key=CMS_KEY):
     headers = {"X-API-Key": key} if key is not None else {}
     return client.post(path, files={"file": (name, content, mime)}, headers=headers)
+
+
+def post_url(path, link, key=CMS_KEY):
+    headers = {"X-API-Key": key} if key is not None else {}
+    return client.post(path, data={"url": link}, headers=headers)
 
 
 def post_form(path, data, key=CMS_KEY):
@@ -119,6 +129,16 @@ else:
 expect("hls rejects loopback", post_form("/scan/hls", {"url": "http://127.0.0.1/a.m3u8"}), 400)
 expect("hls rejects private range", post_form("/scan/hls", {"url": "http://192.168.1.1/a.m3u8"}), 400)
 expect("hls rejects file scheme", post_form("/scan/hls", {"url": "file:///etc/passwd"}), 400)
+
+print("\n  link input")
+service._recent.clear()
+expect("neither file nor url", client.post("/scan", headers={"X-API-Key": CMS_KEY}), 400)
+expect("both file and url", client.post(
+    "/scan", files={"file": ("a.jpg", jpeg(64, 64), "image/jpeg")},
+    data={"url": "https://example.com/a.jpg"}, headers={"X-API-Key": CMS_KEY}), 400)
+expect("image link, loopback blocked", post_url("/scan", "http://127.0.0.1/a.jpg"), 400)
+expect("video link, private blocked", post_url("/scan/video", "http://10.0.0.1/a.mp4"), 400)
+expect("document link, bad scheme", post_url("/scan/document", "file:///etc/passwd"), 400)
 
 print("\n  rate limit of 6 frames per minute, per caller")
 service._recent.clear()

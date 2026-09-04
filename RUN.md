@@ -92,12 +92,61 @@ Chờ tới khi cột STATUS ghi **`(healthy)`**.
 Cả bốn đều cần khoá ở header **`X-API-Key`**, và đều **trả kết quả ngay trong
 response** — không có việc để chờ, không phải hỏi lại.
 
+**Gửi link** (cách CMS nên dùng — không phải tải lại toàn bộ byte):
+
+```bash
+curl -X POST http://localhost:8000/scan          -H "X-API-Key: KHOA" -F "url=https://.../anh.jpg"
+curl -X POST http://localhost:8000/scan/video    -H "X-API-Key: KHOA" -F "url=https://.../video.mp4"
+curl -X POST http://localhost:8000/scan/document -H "X-API-Key: KHOA" -F "url=https://.../tailieu.pdf"
+curl -X POST http://localhost:8000/scan/hls      -H "X-API-Key: KHOA" -F "url=https://.../stream.m3u8"
+```
+
+**Hoặc gửi tệp** — ba endpoint đầu vẫn nhận `file`, dùng khi tệp chưa có địa chỉ
+công khai:
+
 ```bash
 curl -X POST http://localhost:8000/scan          -H "X-API-Key: KHOA" -F "file=@anh.jpg"
 curl -X POST http://localhost:8000/scan/video    -H "X-API-Key: KHOA" -F "file=@video.mp4"
 curl -X POST http://localhost:8000/scan/document -H "X-API-Key: KHOA" -F "file=@tailieu.pdf"
-curl -X POST http://localhost:8000/scan/hls      -H "X-API-Key: KHOA" -F "url=https://.../stream.m3u8"
 ```
+
+Phải gửi **đúng một trong hai**. Gửi cả hai hoặc không gửi gì đều trả **400** —
+nhận cả hai rồi âm thầm chọn một là che mất lỗi của bên gọi: một request định
+quét link nhưng lỡ kèm tệp cũ sẽ nhận về câu trả lời rất tự tin về **sai thứ**.
+
+`/scan/hls` chỉ nhận `url`, vì một luồng thì không có tệp để gửi.
+
+### Link nội bộ — `ALLOW_HOSTS`
+
+Chốt chặn SSRF **từ chối mọi địa chỉ nội bộ**, nên link trỏ về chính CMS của bạn
+(`localhost:8089`, `192.168.x`) sẽ bị chặn:
+
+```json
+{"detail":"Host resolves to a non-public address (127.0.0.1). Add it to ALLOW_HOSTS if the scanner should read from it."}
+```
+
+Khai đúng host cần cho phép:
+
+```bash
+ALLOW_HOSTS=cms.internal,192.168.1.10 docker compose up -d
+```
+
+Chỉ những host được **nêu tên** mới qua; mọi địa chỉ nội bộ khác vẫn bị chặn.
+Danh sách càng ngắn thì lỗ càng hẹp — đừng khai cả dải.
+
+### Trần khi tải link
+
+| | Mặc định | Biến |
+|---|---|---|
+| Kích thước tài nguyên | 512 MB | `MAX_DOWNLOAD_BYTES` |
+
+Trần này cần thiết hơn ở đường tải tệp lên: tệp tải lên tốn băng thông của bên
+gọi, còn link thì tốn của scanner — một request ngắn có thể bắt nó kéo về tệp
+lớn tuỳ ý.
+
+Dịch vụ cũng **đối chiếu `Content-Length`**. Kết nối đứt giữa chừng để lại tệp
+ngắn hơn mà không ném lỗi nào, và với video thì điều đó tệ hơn cả báo lỗi: phần
+tải được có thể quét ra sạch, trong khi phần không về mới là phần đáng lo.
 
 Cả bốn trả về **cùng một hình dạng JSON**, nên bên gọi viết một hàm đọc là dùng
 được cho mọi loại:

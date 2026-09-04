@@ -36,7 +36,19 @@ MAX_PAGES = int(os.getenv("MAX_PAGES", "40"))
 HLS_SECONDS = int(os.getenv("HLS_SECONDS", "60"))
 MAX_SEGMENTS = int(os.getenv("MAX_SEGMENTS", "120"))
 MAX_SEGMENT_BYTES = int(os.getenv("MAX_SEGMENT_BYTES", str(64 * 1024 * 1024)))
+MAX_DOWNLOAD_BYTES = int(os.getenv("MAX_DOWNLOAD_BYTES", str(512 * 1024 * 1024)))
 PDF_DPI = int(os.getenv("PDF_DPI", "72"))
+
+# Hosts allowed to be fetched despite resolving to a private address. An
+# uploading application usually sits on one -- a CMS on localhost or behind the
+# same firewall -- so without this the check that stops the scanner being an
+# open proxy also stops it reading anything the caller actually owns. Naming
+# them one at a time keeps that hole exactly as wide as it has to be.
+ALLOW_HOSTS = {
+    h.strip().lower()
+    for h in os.getenv("ALLOW_HOSTS", "").split(",")
+    if h.strip()
+}
 
 
 class MediaError(Exception):
@@ -102,6 +114,8 @@ def check_url(url):
         raise MediaError("Only http and https URLs are accepted")
     if not parsed.hostname:
         raise MediaError("URL has no host")
+    if parsed.hostname.lower() in ALLOW_HOSTS:
+        return
     try:
         infos = socket.getaddrinfo(parsed.hostname, None)
     except socket.gaierror:
@@ -110,7 +124,10 @@ def check_url(url):
         address = ipaddress.ip_address(info[4][0])
         if (address.is_private or address.is_loopback or address.is_link_local
                 or address.is_reserved or address.is_multicast):
-            raise MediaError(f"Host resolves to a non-public address ({address})")
+            raise MediaError(
+                f"Host resolves to a non-public address ({address}). "
+                "Add it to ALLOW_HOSTS if the scanner should read from it."
+            )
 
 
 def _get(url, limit, timeout=60):
@@ -118,6 +135,7 @@ def _get(url, limit, timeout=60):
     request = urllib.request.Request(url, headers={"User-Agent": "nsfw-scanner"})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
+            declared = response.headers.get("Content-Length")
             body = response.read(limit + 1)
     except urllib.error.HTTPError as e:
         raise MediaError(f"Stream returned HTTP {e.code}")
@@ -125,6 +143,10 @@ def _get(url, limit, timeout=60):
         raise MediaError("Stream could not be reached")
     if len(body) > limit:
         raise MediaError("Stream part is larger than allowed")
+    if declared and declared.isdigit() and len(body) != int(declared):
+        raise MediaError(
+            f"Link sent {len(body)} of {declared} bytes; the transfer was cut short"
+        )
     return body
 
 
@@ -137,6 +159,63 @@ def _bandwidth_of(line):
             except ValueError:
                 return 0
     return 0
+
+
+def fetch_bytes(url, limit=None):
+    """Reads a whole resource into memory. For images and PDFs."""
+    return _get(url, limit or MAX_DOWNLOAD_BYTES, timeout=300)
+
+
+def fetch_to_file(url, path, limit=None):
+    """
+    Streams a resource to disk. For video, which is too large to hold in memory.
+
+    The ceiling matters more here than on an upload. An upload costs the caller
+    the bandwidth it spends; a link costs the scanner, so a short request can
+    ask it to pull a file of any size.
+    """
+    check_url(url)
+    limit = limit or MAX_DOWNLOAD_BYTES
+    request = urllib.request.Request(url, headers={"User-Agent": "nsfw-scanner"})
+    written = 0
+    expected = None
+    try:
+        with urllib.request.urlopen(request, timeout=600) as response, \
+                open(path, "wb") as target:
+            declared = response.headers.get("Content-Length")
+            if declared and declared.isdigit():
+                expected = int(declared)
+                if expected > limit:
+                    raise MediaError(
+                        f"Resource is larger than {limit // 1024 // 1024}MB"
+                    )
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > limit:
+                    raise MediaError(
+                        f"Resource is larger than {limit // 1024 // 1024}MB"
+                    )
+                target.write(chunk)
+    except MediaError:
+        raise
+    except urllib.error.HTTPError as e:
+        raise MediaError(f"Link returned HTTP {e.code}")
+    except Exception:
+        raise MediaError("Link could not be read")
+    if not written:
+        raise MediaError("Link returned nothing")
+    # A dropped connection leaves a shorter file and no exception, and ffmpeg
+    # then reads whatever arrived. For a video that is worse than an error: a
+    # truncated file can scan clean while the part that never downloaded is the
+    # part that mattered.
+    if expected is not None and written != expected:
+        raise MediaError(
+            f"Link sent {written} of {expected} bytes; the transfer was cut short"
+        )
+    return path
 
 
 def _parse_playlist(text):

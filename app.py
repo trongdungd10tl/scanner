@@ -184,15 +184,16 @@ def _reply(kind, scores, nsfw, count, worst, started):
     }
 
 
-async def _spool(upload):
+async def _spool_into(upload, path):
     """Streams an upload to disk. A video is too large to hold in memory."""
-    handle, path = tempfile.mkstemp(suffix=os.path.splitext(upload.filename or "")[1])
-    with os.fdopen(handle, "wb") as target:
+    with open(path, "wb") as target:
         while True:
             chunk = await upload.read(1024 * 1024)
             if not chunk:
                 break
             target.write(chunk)
+    if not os.path.getsize(path):
+        raise HTTPException(status_code=400, detail="Empty file")
     return path
 
 
@@ -218,53 +219,86 @@ def _scan_frames(caller, kind, frames, label, started):
     return reply
 
 
-@app.post("/scan")
-async def scan_image(file: UploadFile = File(...), x_api_key: str = Header(default="")):
-    caller = _identify(x_api_key)
-    _charge(caller)
-    _load_model()
+def _one_source(file, url):
+    """
+    Requires exactly one of file or url.
 
+    Accepting both and silently preferring one hides a caller's mistake: a
+    request meaning to scan a link but carrying a stale upload would come back
+    with a confident answer about the wrong thing.
+    """
+    if bool(url) == bool(file is not None and file.filename):
+        raise HTTPException(
+            status_code=400, detail="Send exactly one of file or url"
+        )
+
+
+async def _bytes_from(file, url):
+    if url:
+        try:
+            return media.fetch_bytes(url), url
+        except media.MediaError as e:
+            raise HTTPException(status_code=400, detail=str(e))
     data = await file.read()
     if not data:
         raise HTTPException(status_code=400, detail="Empty file")
+    return data, file.filename
 
+
+@app.post("/scan")
+async def scan_image(file: UploadFile = File(default=None), url: str = Form(default=""),
+                     x_api_key: str = Header(default="")):
+    caller = _identify(x_api_key)
+    _one_source(file, url)
+    _charge(caller)
+    _load_model()
+
+    data, label = await _bytes_from(file, url)
     started = time.perf_counter()
     scores, nsfw = _score(_open(data))
     reply = _reply("image", scores, nsfw, 1, None, started)
-    log.info("%s image %s -> %s nsfw=%.4f", caller, file.filename, reply["label"], nsfw)
+    log.info("%s image %s -> %s nsfw=%.4f", caller, label, reply["label"], nsfw)
     return reply
 
 
 @app.post("/scan/video")
-async def scan_video(file: UploadFile = File(...), x_api_key: str = Header(default="")):
+async def scan_video(file: UploadFile = File(default=None), url: str = Form(default=""),
+                     x_api_key: str = Header(default="")):
     caller = _identify(x_api_key)
+    _one_source(file, url)
     _charge(caller)
     _load_model()
 
-    source = await _spool(file)
+    handle, source = tempfile.mkstemp(suffix=".video")
+    os.close(handle)
     folder = None
     try:
         started = time.perf_counter()
         try:
+            if url:
+                media.fetch_to_file(url, source)
+                label = url
+            else:
+                await _spool_into(file, source)
+                label = file.filename
             frames = media.video_frames(source)
         except media.MediaError as e:
             raise HTTPException(status_code=400, detail=str(e))
         folder = os.path.dirname(frames[0][1])
-        return _scan_frames(caller, "video", frames, file.filename, started)
+        return _scan_frames(caller, "video", frames, label, started)
     finally:
         _discard(source, folder)
 
 
 @app.post("/scan/document")
-async def scan_document(file: UploadFile = File(...), x_api_key: str = Header(default="")):
+async def scan_document(file: UploadFile = File(default=None), url: str = Form(default=""),
+                        x_api_key: str = Header(default="")):
     caller = _identify(x_api_key)
+    _one_source(file, url)
     _charge(caller)
     _load_model()
 
-    data = await file.read()
-    if not data:
-        raise HTTPException(status_code=400, detail="Empty file")
-
+    data, label = await _bytes_from(file, url)
     folder = None
     try:
         started = time.perf_counter()
@@ -273,7 +307,7 @@ async def scan_document(file: UploadFile = File(...), x_api_key: str = Header(de
         except media.MediaError as e:
             raise HTTPException(status_code=400, detail=str(e))
         folder = os.path.dirname(pages[0][1])
-        return _scan_frames(caller, "document", pages, file.filename, started)
+        return _scan_frames(caller, "document", pages, label, started)
     finally:
         _discard(folder)
 

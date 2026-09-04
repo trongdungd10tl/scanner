@@ -32,10 +32,14 @@ Bốn endpoint, tất cả nhận `multipart/form-data`:
 
 | | Trường | Nhận |
 |---|---|---|
-| `POST /scan` | `file` | ảnh |
-| `POST /scan/video` | `file` | tệp video |
-| `POST /scan/document` | `file` | PDF |
-| `POST /scan/hls` | `url` | địa chỉ luồng `.m3u8` |
+| `POST /scan` | `url` hoặc `file` | ảnh |
+| `POST /scan/video` | `url` hoặc `file` | video |
+| `POST /scan/document` | `url` hoặc `file` | PDF |
+| `POST /scan/hls` | `url` | luồng `.m3u8` |
+
+Phải gửi **đúng một** trong `url` và `file`; cả hai hoặc không có đều trả 400.
+Link trỏ vào địa chỉ nội bộ bị chặn trừ khi khai trong `ALLOW_HOSTS` — xem
+`RUN.md`.
 
 Cả bốn trả **cùng một hình dạng**, nên bên gọi chỉ cần một hàm đọc:
 
