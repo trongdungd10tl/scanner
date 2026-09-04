@@ -312,7 +312,6 @@ python -m venv .venv
 .venv/Scripts/python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 .venv/Scripts/python.exe -m pip install -r requirements.txt -r requirements-media.txt
 bash download_model.sh
-bash download_ffmpeg.sh
 .venv/Scripts/python.exe -m uvicorn app:app --port 8000
 ```
 
@@ -330,7 +329,6 @@ Sửa code rồi tưởng đang thử container mà thật ra đang thử bản 
 | `smoke_test.py` | xác nhận dịch vụ còn sống |
 | `test_input.py` | kiểm cách xử lý đầu vào, chạy thẳng không cần server |
 | `download_model.sh` | tải trọng số về `./models` |
-| `download_ffmpeg.sh` | tải ffmpeg + ffprobe vào `./bin` |
 | `download_model_hf.py` | cách tải thay thế, chậm hơn |
 
 | `issue_key.py` | cấp khoá cho một bên gọi |

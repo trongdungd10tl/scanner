@@ -6,11 +6,16 @@
 # with: python issue_key.py NAME
 #
 # Removing a caller's entry revokes that caller alone. RATE_LIMIT_PER_MINUTE
-# applies to each caller separately, which matters because one scan costs about
-# a second of CPU.
+# applies to each caller separately and counts frames, not requests, because a
+# video costs as much as the frames it yields.
 services:
   scanner:
-    build: .
+    build:
+      context: .
+      args:
+        # Set APT_MIRROR when deb.debian.org is slow from your build machine.
+        # It measured 17 KB/s here against 12 MB/s for a local mirror.
+        APT_MIRROR: ${APT_MIRROR:-deb.debian.org}
     container_name: nsfw-scanner
     restart: unless-stopped
     ports:

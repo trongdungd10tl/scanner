@@ -31,12 +31,33 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY download_file.sh download_model.sh ./
 RUN sed -i 's/\r$//' download_file.sh download_model.sh && bash download_model.sh
 
-# A static ffmpeg rather than apt's. The package wants 130MB to fetch and adds
-# 455MB to the image, because it drags in the whole desktop media stack to
-# satisfy its dependencies; this archive is 42MB and self-contained.
-COPY download_ffmpeg.sh .
-RUN sed -i 's/\r$//' download_ffmpeg.sh && bash download_ffmpeg.sh \
-    && mv bin/ffmpeg bin/ffprobe /usr/local/bin/ && rmdir bin
+# apt's ffmpeg. It costs 130MB to fetch and 455MB in the image, against 39MB
+# for a static build, and it drags in Mesa and LLVM for a service with no
+# display. It is still the right choice, because the static build was tried and
+# crashes: any URL with a hostname segfaulted, and so did reading a plain local
+# MPEG-TS file, which is the format HLS segments arrive in. Two unrelated
+# crashes in one binary is enough.
+#
+# Set APT_MIRROR when deb.debian.org is slow or unreachable from the build
+# machine. From here it delivered 17 KB/s, which put this step at two hours,
+# while a local mirror measured 12 MB/s for the same file -- the packages are
+# not the problem, the route to them is. Measure before choosing one:
+#
+#   curl -o /dev/null -w '%{speed_download}\n' \
+#        https://MIRROR/debian/dists/trixie/main/binary-amd64/Packages.gz
+#
+#   APT_MIRROR=your.mirror docker compose build
+# Lines mentioning security are left alone: a mirror that carries /debian often
+# does not carry /debian-security, and rewriting both turns a slow build into a
+# failing one with a 404 on the security Release file.
+ARG APT_MIRROR=deb.debian.org
+RUN if [ "$APT_MIRROR" != "deb.debian.org" ]; then \
+        sed -i "/security/!s|deb.debian.org|$APT_MIRROR|g" \
+            /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list 2>/dev/null || true; \
+    fi \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY requirements-media.txt .
 RUN pip install --no-cache-dir -r requirements-media.txt

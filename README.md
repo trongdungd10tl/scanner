@@ -19,7 +19,6 @@ làm chưa được, và những chỗ đã vấp.
 | `requirements.txt` | phụ thuộc lõi |
 | `requirements-media.txt` | phụ thuộc cho video/PDF, tách riêng vì lý do đệm Docker |
 | `download_model.sh` | tải trọng số, 8 kết nối song song |
-| `download_ffmpeg.sh` | tải ffmpeg + ffprobe bản static vào `bin/` |
 | `download_file.sh` | hàm tải dùng chung: 8 kết nối song song, nối tiếp được |
 | `download_model_hf.py` | cách tải thay thế, một kết nối |
 | `scan.py` | quét một ảnh từ dòng lệnh |
@@ -182,22 +181,48 @@ tự dán nhãn, rồi xem điểm cắt ở đâu là hợp.
 ## ffmpeg
 
 `media.py` gọi `ffprobe` để lấy độ dài rồi `ffmpeg` để trích khung. Cả hai nằm
-**trong image**, tải lúc build bởi `download_ffmpeg.sh` — không phải cài gì thêm
-trên server.
+**trong image** — không phải cài gì thêm trên server.
 
-Dùng bản **static** thay vì gói của apt vì đo được:
+Dùng gói của `apt`. Đã thử bản static 39MB để image gọn hơn 375MB, và **bỏ**:
+nó sập ở hai chỗ độc lập.
 
-| | Tải về | Chiếm thêm trong image |
-|---|---|---|
-| `apt-get install ffmpeg` | 130 MB | **455 MB** |
-| Bản static | **42 MB** | ~80 MB |
+```
+URL có tên miền   ->  Segmentation fault
+tệp .ts cục bộ    ->  exit 139 (SIGSEGV)
+```
 
-Gói của apt kéo theo cả bộ thư viện đa phương tiện của máy để bàn để thoả mãn
-phụ thuộc, dù dịch vụ này chỉ cần hai tệp nhị phân.
+Cái thứ hai mới chí mạng: `.ts` chính là định dạng các đoạn HLS. Đổi một đường
+ống video chạy được lấy một image nhỏ hơn là đánh đổi ngược.
 
-Script giải nén bằng Python thay vì `tar`, vì `tar` cần thêm gói `xz-utils` —
-mà thêm gói đó vào lớp apt phía trên sẽ **xoá mất lớp đệm chứa 354MB trọng số**
-nằm bên dưới.
+### Nếu build chậm, đổi mirror
+
+Đây là bài học đắt nhất của phần này. `apt` bò ở **17 KB/s** từ máy build, khiến
+bước cài ffmpeg mất **2 tiếng**, và tôi đã đổ tại "apt nặng" rồi đi đường vòng
+mấy tiếng qua bản static. Đo thật thì nguyên nhân khác hẳn:
+
+| Mirror | Tốc độ |
+|---|---|
+| `deb.debian.org` (mặc định) | **không phản hồi** |
+| `opensource.xtdv.net` | **12.040 KB/s** |
+| `mirror.bizflycloud.vn` | 8.556 KB/s |
+
+Cùng một tệp, nhanh hơn ~700 lần. Sau khi đổi mirror, bước đó xong trong **90
+giây**.
+
+```bash
+APT_MIRROR=opensource.xtdv.net docker compose build
+```
+
+**Đo trước khi chọn**, đừng đoán như tôi:
+
+```bash
+curl -o /dev/null -w '%{speed_download}
+'      https://MIRROR/debian/dists/trixie/main/binary-amd64/Packages.gz
+```
+
+Mặc định vẫn là `deb.debian.org` vì nó đúng ở mọi nơi. Các dòng có chữ
+`security` **không** bị đổi — mirror có `/debian` thường không có
+`/debian-security`, đổi cả hai là build hỏng với lỗi 404.
 
 ## Ghi chú khi cài
 
