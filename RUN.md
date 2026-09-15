@@ -92,26 +92,26 @@ Chờ tới khi cột STATUS ghi **`(healthy)`**.
 Cả bốn đều **trả kết quả ngay trong response** — không có việc để chờ, không
 phải hỏi lại. Không endpoint nào đòi xác thực.
 
-Ba endpoint đầu nhận **link**, `/scan/hls` cũng vậy:
+Ba endpoint đầu nhận **link**, `/media-moderation/scan/hls` cũng vậy:
 
 ```bash
-curl -X POST http://localhost:8000/scan          -F "url=https://.../anh.jpg"
-curl -X POST http://localhost:8000/scan/video    -F "url=https://.../video.mp4"
-curl -X POST http://localhost:8000/scan/document -F "url=https://.../tailieu.pdf"
-curl -X POST http://localhost:8000/scan/hls      -F "url=https://.../stream.m3u8"
+curl -X POST http://localhost:8000/media-moderation/scan          -F "url=https://.../anh.jpg"
+curl -X POST http://localhost:8000/media-moderation/scan/video    -F "url=https://.../video.mp4"
+curl -X POST http://localhost:8000/media-moderation/scan/document -F "url=https://.../tailieu.pdf"
+curl -X POST http://localhost:8000/media-moderation/scan/hls      -F "url=https://.../stream.m3u8"
 ```
 
 | Endpoint | Nhận |
 |---|---|
-| `/scan` | **chỉ `url`** |
-| `/scan/video` | **chỉ `url`** |
-| `/scan/document` | `url` hoặc `file` |
-| `/scan/hls` | chỉ `url` |
+| `/media-moderation/scan` | **chỉ `url`** |
+| `/media-moderation/scan/video` | **chỉ `url`** |
+| `/media-moderation/scan/document` | `url` hoặc `file` |
+| `/media-moderation/scan/hls` | chỉ `url` |
 
-Gửi `file` vào `/scan` hay `/scan/video` trả **422** — FastAPI báo thiếu trường
+Gửi `file` vào `/media-moderation/scan` hay `/media-moderation/scan/video` trả **422** — FastAPI báo thiếu trường
 `url` bắt buộc.
 
-`/scan/document` vẫn nhận tệp tải lên, vì một PDF thường được giữ trước khi
+`/media-moderation/scan/document` vẫn nhận tệp tải lên, vì một PDF thường được giữ trước khi
 công bố ở đâu đó nên chưa có link để gửi. Với nó, phải gửi **đúng một** trong
 `url` và `file`; cả hai hoặc không có đều trả **400** — nhận cả hai rồi âm thầm
 chọn một sẽ che mất lỗi của bên gọi.
@@ -202,7 +202,7 @@ mặc định 60.
 Đổi được bằng biến môi trường, nhưng nhớ rằng nâng trần là kéo dài thời gian
 người gọi phải chờ.
 
-### `/scan/hls` chỉ nhận địa chỉ công cộng
+### `/media-moderation/scan/hls` chỉ nhận địa chỉ công cộng
 
 URL trỏ vào `127.0.0.1`, dải nội bộ (`192.168.x`, `10.x`, `172.16-31.x`), địa
 chỉ link-local hay scheme không phải `http`/`https` đều bị từ chối **400**.
@@ -214,9 +214,9 @@ chỉ mà những nơi đó tin tưởng hơn hẳn người ngoài.
 
 Vượt hạn mức trả **429**.
 
-`/health` cho biết mô hình đã nạp xong hay chưa — healthcheck của Docker gọi nó.
+`/media-moderation/health` cho biết mô hình đã nạp xong hay chưa — healthcheck của Docker gọi nó.
 
-Có sẵn giao diện thử trong trình duyệt: <http://localhost:8000/docs>
+Có sẵn giao diện thử trong trình duyệt: <http://localhost:8000/media-moderation/docs>
 
 ## Không có xác thực
 

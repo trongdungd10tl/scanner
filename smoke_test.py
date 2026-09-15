@@ -24,7 +24,7 @@ body = (
 ).encode() + content + f"\r\n--{boundary}--\r\n".encode()
 
 request = urllib.request.Request(
-    f"{service}/scan",
+    f"{service}/media-moderation/scan",
     data=body,
     headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
 )

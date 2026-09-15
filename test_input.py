@@ -28,6 +28,7 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
+os.environ["CONTEXT_PATH"] = "/media-moderation"
 os.environ["RATE_LIMIT_PER_MINUTE"] = "6"
 os.environ["ALLOW_HOSTS"] = "127.0.0.1"
 
@@ -37,6 +38,7 @@ from PIL import Image
 import app as service
 
 client = TestClient(service.app)
+PREFIX = "/media-moderation"
 failures = 0
 skipped = 0
 
@@ -87,11 +89,11 @@ BASE = "http://127.0.0.1:%d" % server.server_address[1]
 
 
 def post_url(path, link):
-    return client.post(path, data={"url": link})
+    return client.post(PREFIX + path, data={"url": link})
 
 
 def post_file(path, name, content, mime):
-    return client.post(path, files={"file": (name, content, mime)})
+    return client.post(PREFIX + path, files={"file": (name, content, mime)})
 
 
 def expect(description, response, status):
@@ -112,14 +114,14 @@ def skip(description, reason):
 
 
 print("\n  health")
-expect("health answers", client.get("/health"), 200)
+expect("health answers", client.get(PREFIX + "/health"), 200)
 
 print("\n  image by link")
 service._recent.clear()
 expect("real link", post_url("/scan", BASE + "/a.jpg"), 200)
 expect("link is not an image", post_url("/scan", BASE + "/junk.bin"), 400)
 expect("link that 404s", post_url("/scan", BASE + "/missing.jpg"), 400)
-expect("no url at all", client.post("/scan"), 422)
+expect("no url at all", client.post(PREFIX + "/scan"), 422)
 expect("upload no longer accepted",
        post_file("/scan", "a.jpg", jpeg(64, 64), "image/jpeg"), 422)
 

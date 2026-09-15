@@ -31,10 +31,10 @@ Bốn endpoint, tất cả nhận `multipart/form-data`:
 
 | | Trường | Nhận |
 |---|---|---|
-| `POST /scan` | `url` | ảnh |
-| `POST /scan/video` | `url` | video |
-| `POST /scan/document` | `url` hoặc `file` | PDF |
-| `POST /scan/hls` | `url` | luồng `.m3u8` |
+| `POST /media-moderation/scan` | `url` | ảnh |
+| `POST /media-moderation/scan/video` | `url` | video |
+| `POST /media-moderation/scan/document` | `url` hoặc `file` | PDF |
+| `POST /media-moderation/scan/hls` | `url` | luồng `.m3u8` |
 
 Ảnh, video và luồng **chỉ nhận link** — bên gọi đã lưu tệp ở đâu đó rồi, gửi lại
 toàn bộ byte chỉ là chuyển chúng đi hai lần. Tài liệu vẫn nhận cả tệp tải lên,
@@ -70,7 +70,7 @@ nó chìm nghỉm. `worst_at` là giây (video, hls) hoặc số trang (tài li�
 
 Chi tiết cách gọi, trần lấy mẫu và chốt chặn SSRF: xem `RUN.md`.
 
-`GET /health` trả trạng thái nạp mô hình, không cần khoá.
+`GET /media-moderation/health` trả trạng thái nạp mô hình.
 
 ### Hạn mức
 
@@ -244,6 +244,6 @@ thiếu; lần đầu không làm vậy đã ghép ra một tệp thiếu 134MB.
 ## Nối vào CMS
 
 Xem `docs/KIEM-DUYET-NOI-DUNG.md` mục 6. Tóm tắt: viết một lớp hiện thực
-`ContentScanner` gọi `POST /scan`, và **thay resource handler tĩnh `/files/**`
+`ContentScanner` gọi `POST /media-moderation/scan`, và **thay resource handler tĩnh `/files/**`
 bằng controller kiểm trạng thái** — không có bước sau thì việc kiểm duyệt không
 có tác dụng gì.

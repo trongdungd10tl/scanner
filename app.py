@@ -40,7 +40,7 @@ import time
 from collections import defaultdict, deque
 
 import torch
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Request, UploadFile
 from PIL import Image
 from transformers import AutoImageProcessor, SiglipForImageClassification
 
@@ -54,7 +54,11 @@ HUB_NAME = "strangerguardhf/nsfw_image_detection"
 UNSAFE_LABELS = {"Hentai", "Pornography", "Enticing or Sensual"}
 RATE_LIMIT = int(os.getenv("RATE_LIMIT_PER_MINUTE", "300"))
 
-app = FastAPI(title="NSFW scanner")
+CONTEXT_PATH = os.getenv("CONTEXT_PATH", "/media-moderation").rstrip("/")
+
+app = FastAPI(title="NSFW scanner", docs_url=CONTEXT_PATH + "/docs",
+              openapi_url=CONTEXT_PATH + "/openapi.json")
+api = APIRouter(prefix=CONTEXT_PATH)
 
 _processor = None
 _model = None
@@ -114,7 +118,7 @@ def startup():
     _load_model()
 
 
-@app.get("/health")
+@api.get("/health")
 def health():
     return {"status": "ok", "model_loaded": _model is not None}
 
@@ -212,7 +216,7 @@ async def _bytes_from(file, url):
     return data, file.filename
 
 
-@app.post("/scan")
+@api.post("/scan")
 async def scan_image(request: Request, url: str = Form(...)):
     caller = _caller(request)
     _charge(caller)
@@ -230,7 +234,7 @@ async def scan_image(request: Request, url: str = Form(...)):
     return reply
 
 
-@app.post("/scan/video")
+@api.post("/scan/video")
 async def scan_video(request: Request, url: str = Form(...)):
     caller = _caller(request)
     _charge(caller)
@@ -252,7 +256,7 @@ async def scan_video(request: Request, url: str = Form(...)):
         _discard(source, folder)
 
 
-@app.post("/scan/document")
+@api.post("/scan/document")
 async def scan_document(request: Request, file: UploadFile = File(default=None),
                         url: str = Form(default="")):
     caller = _caller(request)
@@ -274,7 +278,7 @@ async def scan_document(request: Request, file: UploadFile = File(default=None),
         _discard(folder)
 
 
-@app.post("/scan/hls")
+@api.post("/scan/hls")
 async def scan_hls(request: Request, url: str = Form(...)):
     caller = _caller(request)
     _charge(caller)
@@ -291,3 +295,6 @@ async def scan_hls(request: Request, url: str = Form(...)):
         return _scan_frames(caller, "hls", frames, url, started)
     finally:
         _discard(folder)
+
+
+app.include_router(api)
