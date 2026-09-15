@@ -3,11 +3,8 @@ Smoke test. Sends one generated image to a running service to confirm it
 answers. Proves the service is alive, not that the model judges well.
 
     python smoke_test.py [http://host:port]
-
-Set API_KEY to the key issued to you.
 """
 import io
-import os
 import sys
 import urllib.request
 
@@ -29,9 +26,6 @@ body = (
 request = urllib.request.Request(
     f"{service}/scan",
     data=body,
-    headers={
-        "Content-Type": f"multipart/form-data; boundary={boundary}",
-        "X-API-Key": os.getenv("API_KEY", ""),
-    },
+    headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
 )
 print(urllib.request.urlopen(request, timeout=120).read().decode())

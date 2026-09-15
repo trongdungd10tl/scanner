@@ -19,22 +19,18 @@ wait. Batching frames through the model measured only 1.2x faster, because torch
 already spreads a single image across every core, so frames are scored one at a
 time and the code stays simple.
 
-Every caller gets its own key, and API_KEYS holds only their SHA-256 digests
-alongside a name, so no key appears in this repository or in any image built
-from it. Naming each caller is what makes a single leaked key revocable on its
-own, lets the log say who called without printing a key, and gives each caller a
-separate budget.
+There is no authentication. Anything that can reach the port can spend the
+model's CPU on it, so the port must not be one the open internet can reach -
+bind it to a private network, or put a gateway in front that does the
+authenticating.
 
-Digests are compared with compare_digest rather than ==, which stops at the
-first differing character and so leaks, through response time, how much of a
-guess was right. The service refuses to start with no keys configured, because
-running unprotected looks exactly like running correctly.
-
-/health is deliberately left open: the container health check calls it, and it
-reveals nothing beyond whether the model finished loading.
+The frame budget is still enforced, now per client address instead of per
+caller. It is a safeguard against one client starving the rest, not a security
+control: an address is trivially many, and behind a reverse proxy every caller
+arrives wearing the proxy's address and shares a single bucket. X-Forwarded-For
+is deliberately not read, because trusting a header any client can set would
+hand out a fresh budget on request.
 """
-import hashlib
-import hmac
 import io
 import logging
 import os
@@ -44,7 +40,7 @@ import time
 from collections import defaultdict, deque
 
 import torch
-from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from PIL import Image
 from transformers import AutoImageProcessor, SiglipForImageClassification
 
@@ -65,34 +61,15 @@ _model = None
 _recent = defaultdict(deque)
 
 
-def _parse_keys(raw):
-    keys = {}
-    for entry in raw.split(","):
-        entry = entry.strip()
-        if not entry:
-            continue
-        name, _, digest = entry.partition(":")
-        name, digest = name.strip(), digest.strip().lower()
-        if not name or len(digest) != 64:
-            raise RuntimeError(
-                "API_KEYS entry " + repr(entry) + " is not name:<64 character "
-                "sha256>. Generate one with: python issue_key.py NAME"
-            )
-        keys[digest] = name
-    return keys
+def _caller(request):
+    """
+    Who to bill, and what to write in the log.
 
-
-API_KEYS = _parse_keys(os.getenv("API_KEYS", ""))
-
-
-def _identify(provided):
-    if not provided:
-        raise HTTPException(status_code=401, detail="Missing X-API-Key header")
-    digest = hashlib.sha256(provided.encode("utf-8")).hexdigest()
-    for known, name in API_KEYS.items():
-        if hmac.compare_digest(digest, known):
-            return name
-    raise HTTPException(status_code=403, detail="Invalid API key")
+    The client address is all that is left to go on. Behind a reverse proxy that
+    is the proxy, so every caller shares one budget - see the note at the top of
+    this file about why X-Forwarded-For is not read instead.
+    """
+    return request.client.host if request.client else "unknown"
 
 
 def _charge(name, units=1):
@@ -131,13 +108,9 @@ def _load_model():
 
 @app.on_event("startup")
 def startup():
-    if not API_KEYS:
-        raise RuntimeError(
-            "API_KEYS is empty. Set it to name:sha256 entries separated by "
-            "commas. Generate one with: python issue_key.py NAME"
-        )
-    log.info("Callers: %s, %d frames per minute each",
-             sorted(API_KEYS.values()), RATE_LIMIT)
+    log.warning("No authentication. Anything that can reach this port may use "
+                "it; keep it off the public internet. %d frames per minute per "
+                "client address.", RATE_LIMIT)
     _load_model()
 
 
@@ -240,8 +213,8 @@ async def _bytes_from(file, url):
 
 
 @app.post("/scan")
-async def scan_image(url: str = Form(...), x_api_key: str = Header(default="")):
-    caller = _identify(x_api_key)
+async def scan_image(request: Request, url: str = Form(...)):
+    caller = _caller(request)
     _charge(caller)
     _load_model()
 
@@ -258,8 +231,8 @@ async def scan_image(url: str = Form(...), x_api_key: str = Header(default="")):
 
 
 @app.post("/scan/video")
-async def scan_video(url: str = Form(...), x_api_key: str = Header(default="")):
-    caller = _identify(x_api_key)
+async def scan_video(request: Request, url: str = Form(...)):
+    caller = _caller(request)
     _charge(caller)
     _load_model()
 
@@ -280,9 +253,9 @@ async def scan_video(url: str = Form(...), x_api_key: str = Header(default="")):
 
 
 @app.post("/scan/document")
-async def scan_document(file: UploadFile = File(default=None), url: str = Form(default=""),
-                        x_api_key: str = Header(default="")):
-    caller = _identify(x_api_key)
+async def scan_document(request: Request, file: UploadFile = File(default=None),
+                        url: str = Form(default="")):
+    caller = _caller(request)
     _one_source(file, url)
     _charge(caller)
     _load_model()
@@ -302,8 +275,8 @@ async def scan_document(file: UploadFile = File(default=None), url: str = Form(d
 
 
 @app.post("/scan/hls")
-async def scan_hls(url: str = Form(...), x_api_key: str = Header(default="")):
-    caller = _identify(x_api_key)
+async def scan_hls(request: Request, url: str = Form(...)):
+    caller = _caller(request)
     _charge(caller)
     _load_model()
 

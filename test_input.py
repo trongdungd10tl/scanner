@@ -1,11 +1,12 @@
 """
-Checks authentication, rate limiting, the SSRF guard and input handling across
-all four endpoints. Runs against the application directly, so no server needs
-to be started.
+Checks the rate limit, the SSRF guard and input handling across all four
+endpoints. Runs against the application directly, so no server needs to be
+started.
 
     python test_input.py
 
-Uses throwaway keys of its own, so it neither needs nor reveals a real one.
+There is nothing here about authentication because the service has none: the
+port itself is the boundary now.
 
 Images, video and streams are named by URL, so the happy paths are served by a
 small HTTP server this file starts on loopback, with ALLOW_HOSTS naming only
@@ -18,7 +19,6 @@ Cases needing ffmpeg or pymupdf are skipped when those are missing, which is
 normal on a development machine; the Docker image has both, so nothing is
 skipped there. Skips are reported, never counted as passes.
 """
-import hashlib
 import http.server
 import io
 import os
@@ -28,15 +28,6 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
-CMS_KEY = "test-key-for-cms"
-PARTNER_KEY = "test-key-for-partner"
-
-
-def digest(value):
-    return hashlib.sha256(value.encode()).hexdigest()
-
-
-os.environ["API_KEYS"] = "cms:%s,partnerA:%s" % (digest(CMS_KEY), digest(PARTNER_KEY))
 os.environ["RATE_LIMIT_PER_MINUTE"] = "6"
 os.environ["ALLOW_HOSTS"] = "127.0.0.1"
 
@@ -95,14 +86,12 @@ threading.Thread(target=server.serve_forever, daemon=True).start()
 BASE = "http://127.0.0.1:%d" % server.server_address[1]
 
 
-def post_url(path, link, key=CMS_KEY):
-    headers = {"X-API-Key": key} if key is not None else {}
-    return client.post(path, data={"url": link}, headers=headers)
+def post_url(path, link):
+    return client.post(path, data={"url": link})
 
 
-def post_file(path, name, content, mime, key=CMS_KEY):
-    headers = {"X-API-Key": key} if key is not None else {}
-    return client.post(path, files={"file": (name, content, mime)}, headers=headers)
+def post_file(path, name, content, mime):
+    return client.post(path, files={"file": (name, content, mime)})
 
 
 def expect(description, response, status):
@@ -122,17 +111,15 @@ def skip(description, reason):
     print("  [    ] %-32s skipped, no %s" % (description, reason))
 
 
-print("\n  authentication")
-expect("no key", post_url("/scan", BASE + "/a.jpg", key=None), 401)
-expect("wrong key", post_url("/scan", BASE + "/a.jpg", key="wrong"), 403)
-expect("health needs no key", client.get("/health"), 200)
+print("\n  health")
+expect("health answers", client.get("/health"), 200)
 
 print("\n  image by link")
 service._recent.clear()
 expect("real link", post_url("/scan", BASE + "/a.jpg"), 200)
 expect("link is not an image", post_url("/scan", BASE + "/junk.bin"), 400)
 expect("link that 404s", post_url("/scan", BASE + "/missing.jpg"), 400)
-expect("no url at all", client.post("/scan", headers={"X-API-Key": CMS_KEY}), 422)
+expect("no url at all", client.post("/scan"), 422)
 expect("upload no longer accepted",
        post_file("/scan", "a.jpg", jpeg(64, 64), "image/jpeg"), 422)
 
@@ -166,12 +153,25 @@ if HAS_FFMPEG:
 else:
     skip("video frames", "ffmpeg")
 
-print("\n  rate limit of 6 frames per minute, per caller")
+print("\n  rate limit of 6 frames per minute, per client address")
 service._recent.clear()
 for number in range(1, 7):
-    expect("cms frame %d" % number, post_url("/scan", BASE + "/a.jpg"), 200)
-expect("cms frame 7 refused", post_url("/scan", BASE + "/a.jpg"), 429)
-expect("partnerA unaffected", post_url("/scan", BASE + "/a.jpg", key=PARTNER_KEY), 200)
+    expect("frame %d" % number, post_url("/scan", BASE + "/a.jpg"), 200)
+expect("frame 7 refused", post_url("/scan", BASE + "/a.jpg"), 429)
+
+# Buckets are per address, but TestClient only ever has one, so the "another
+# caller is unaffected" case cannot be driven through HTTP any more - it used to
+# be driven with a second key. Charging a different address directly is the
+# closest honest substitute: it proves the budget is keyed, not global.
+try:
+    service._charge("10.9.9.9", 6)
+    passed = True
+except Exception:
+    passed = False
+failures += 0 if passed else 1
+print("  [%s] %-32s %s" % ("OK " if passed else "FAIL",
+                           "another address has its own budget",
+                           "allowed" if passed else "refused"))
 
 server.shutdown()
 

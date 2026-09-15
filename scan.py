@@ -4,8 +4,7 @@ per-label scores as a bar chart.
 
     python scan.py path/to/image.jpg
 
-Set API_KEY to the key issued to you, and SCANNER_URL to reach a
-service on another host.
+Set SCANNER_URL to reach a service on another host.
 """
 import json
 import mimetypes
@@ -20,7 +19,6 @@ if len(sys.argv) < 2:
 
 path = sys.argv[1]
 service = os.getenv("SCANNER_URL", "http://127.0.0.1:8000")
-api_key = os.getenv("API_KEY", "")
 
 if not os.path.isfile(path):
     print("File not found:", path)
@@ -40,10 +38,7 @@ body = (
 request = urllib.request.Request(
     f"{service}/scan",
     data=body,
-    headers={
-        "Content-Type": f"multipart/form-data; boundary={boundary}",
-        "X-API-Key": api_key,
-    },
+    headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
 )
 
 try:

@@ -22,7 +22,6 @@ làm chưa được, và những chỗ đã vấp.
 | `download_file.sh` | hàm tải dùng chung: 8 kết nối song song, nối tiếp được |
 | `download_model_hf.py` | cách tải thay thế, một kết nối |
 | `scan.py` | quét một ảnh từ dòng lệnh |
-| `issue_key.py` | cấp khoá cho một bên gọi |
 | `smoke_test.py` | xác nhận dịch vụ còn sống |
 | `test_input.py` | kiểm cách xử lý đầu vào |
 
@@ -73,28 +72,22 @@ Chi tiết cách gọi, trần lấy mẫu và chốt chặn SSRF: xem `RUN.md`.
 
 `GET /health` trả trạng thái nạp mô hình, không cần khoá.
 
-### Xác thực và hạn mức
+### Hạn mức
 
-`/scan` đòi header `X-API-Key`. Thiếu trả **401**, sai trả **403**, vượt hạn mức
-trả **429**.
+**Dịch vụ không có xác thực.** Bất cứ thứ gì chạm được tới cổng 8000 đều dùng
+được nó, nên **cổng đó không được để Internet chạm tới**: gắn vào mạng nội bộ,
+hoặc đặt một cổng vào phía trước lo phần xác thực.
 
-Mỗi bên gọi một khoá riêng; `API_KEYS` chỉ giữ **băm SHA-256 kèm tên**, nên không
-khoá nào có mặt trong repo lẫn trong image. Bốn lựa chọn đi kèm:
+Hạn mức vẫn còn, tính **theo địa chỉ máy gọi** và **đếm theo khung chứ không
+theo lời gọi**. Một khung tốn ~220ms CPU, nên một bên gửi đều đặn là làm nghẽn
+mọi bên khác dù không cố ý; còn nếu đếm theo lời gọi thì gói 60 ảnh vào một tệp
+video là tiêu 60 lần ngân sách mà chỉ mất một lượt. Vượt hạn mức trả **429**.
 
-- **Đặt tên từng bên gọi.** Nhờ đó thu hồi được một bên mà không đụng các bên
-  khác, log ghi được ai gọi mà không phải in khoá ra, và mỗi bên có hạn mức riêng.
-- **Hạn mức tính riêng từng khoá, và đếm theo khung chứ không theo lời gọi.**
-  Một khung tốn ~220ms CPU, nên một bên gửi đều đặn là làm nghẽn mọi bên khác dù
-  không cố ý. Nếu đếm theo lời gọi thì gói 60 ảnh vào một tệp video là tiêu 60
-  lần ngân sách mà chỉ mất một lượt.
-- **So sánh bằng `hmac.compare_digest`**, không phải `==`. So sánh chuỗi thường
-  dừng ngay tại ký tự đầu tiên khác nhau, nên thời gian trả lời hé lộ đoán đúng
-  được bao nhiêu ký tự đầu.
-- **Không khởi động nếu chưa có khoá nào.** Chạy hở là trạng thái nguy hiểm mà
-  trông y hệt lúc chạy đúng.
-
-Khoá vẫn đi qua mạng ở dạng rõ, nên ra khỏi mạng nội bộ thì phải có TLS — xem mục
-"Chạy sau HTTPS" trong `RUN.md`.
+Đây là biện pháp giữ cho một bên không chiếm hết máy, **không phải biện pháp bảo
+mật**: địa chỉ thì đổi bao nhiêu cũng được, và khi đứng sau reverse proxy thì mọi
+bên gọi đều mang địa chỉ của proxy nên dùng chung một ngân sách. Header
+`X-Forwarded-For` cố tình không được đọc, vì tin vào một header mà bên gọi tự đặt
+được thì chỉ là phát ngân sách mới theo yêu cầu.
 
 ## Tốc độ đo được
 

@@ -3,7 +3,6 @@ models/
 __pycache__/
 *.pyc
 download_model_hf.py
-issue_key.py
 scan.py
 smoke_test.py
 test_input.py

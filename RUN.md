@@ -89,16 +89,16 @@ Chờ tới khi cột STATUS ghi **`(healthy)`**.
 
 ## Bốn endpoint
 
-Cả bốn đều cần khoá ở header **`X-API-Key`**, và đều **trả kết quả ngay trong
-response** — không có việc để chờ, không phải hỏi lại.
+Cả bốn đều **trả kết quả ngay trong response** — không có việc để chờ, không
+phải hỏi lại. Không endpoint nào đòi xác thực.
 
 Ba endpoint đầu nhận **link**, `/scan/hls` cũng vậy:
 
 ```bash
-curl -X POST http://localhost:8000/scan          -H "X-API-Key: KHOA" -F "url=https://.../anh.jpg"
-curl -X POST http://localhost:8000/scan/video    -H "X-API-Key: KHOA" -F "url=https://.../video.mp4"
-curl -X POST http://localhost:8000/scan/document -H "X-API-Key: KHOA" -F "url=https://.../tailieu.pdf"
-curl -X POST http://localhost:8000/scan/hls      -H "X-API-Key: KHOA" -F "url=https://.../stream.m3u8"
+curl -X POST http://localhost:8000/scan          -F "url=https://.../anh.jpg"
+curl -X POST http://localhost:8000/scan/video    -F "url=https://.../video.mp4"
+curl -X POST http://localhost:8000/scan/document -F "url=https://.../tailieu.pdf"
+curl -X POST http://localhost:8000/scan/hls      -F "url=https://.../stream.m3u8"
 ```
 
 | Endpoint | Nhận |
@@ -212,48 +212,26 @@ thể bắt server của bạn gửi request tới cổng quản trị của ch�
 máy bên cạnh, hay tới endpoint metadata của nhà cung cấp đám mây — từ một địa
 chỉ mà những nơi đó tin tưởng hơn hẳn người ngoài.
 
-Thiếu khoá trả **401**, sai khoá trả **403**, vượt hạn mức trả **429**.
+Vượt hạn mức trả **429**.
 
-`/health` không cần khoá — healthcheck của Docker gọi nó, và nó không tiết lộ gì
-ngoài việc mô hình đã nạp xong hay chưa.
+`/health` cho biết mô hình đã nạp xong hay chưa — healthcheck của Docker gọi nó.
 
 Có sẵn giao diện thử trong trình duyệt: <http://localhost:8000/docs>
 
-## Khoá API
+## Không có xác thực
 
-Mỗi bên gọi **một khoá riêng**. Moderation chỉ giữ bản băm SHA-256 kèm tên:
+Dịch vụ **không kiểm tra gì cả**: thứ gì gọi được tới cổng 8000 thì dùng được nó.
+Cổng đó do đó **không được để Internet chạm tới**. Hai cách thường dùng:
 
-```yaml
-environment:
-  API_KEYS: "cms:a160b94c...,partnerA:3f81e2d5...,partnerB:c07ab914..."
-```
+- **Chỉ mở trong mạng nội bộ.** Trong `docker-compose.yml`, đổi `"8000:8000"`
+  thành `"127.0.0.1:8000:8000"` để chỉ chính máy đó gọi được, hoặc gắn container
+  vào mạng Docker chung với bên gọi và **bỏ hẳn `ports`** — lúc ấy chỉ các
+  container cùng mạng thấy nó.
+- **Đặt một cổng vào phía trước** (Caddy, nginx, API gateway) và cho nó lo phần
+  xác thực. Xem mục "Chạy sau HTTPS" bên dưới.
 
-Khoá thật không nằm trong repo, không nằm trong image. Người đọc được toàn bộ mã
-nguồn cũng chỉ thấy bản băm, mà gửi bản băm lên thì bị từ chối.
-
-### Cấp khoá cho một bên
-
-```bash
-python issue_key.py partnerA
-```
-
-```
-Give this to the caller. It is stored nowhere and cannot be recovered:
-  scanner_partnerA_9hRmI1lTuEfYDn9-DI2z8CjTGO_6QJKL
-
-Add this to API_KEYS in docker-compose.yml, comma separated:
-  partnerA:fe42f870754758db48db53dd23b42dda3d5087491434294d808a52d08800174d
-```
-
-Gửi dòng khoá cho đối tác **qua kênh riêng**, dán dòng thứ hai vào `API_KEYS`,
-rồi `docker compose up -d`. Không phải build lại image.
-
-Khoá chỉ hiện đúng một lần. Mất thì cấp khoá mới, không lấy lại được.
-
-### Thu hồi một bên
-
-Xoá đúng mục của bên đó khỏi `API_KEYS` rồi `docker compose up -d`. **Các bên
-còn lại không bị ảnh hưởng** — đó là lý do mỗi bên một khoá thay vì dùng chung.
+Nếu sau này cần khoá trở lại thì đó là việc của cổng vào, đừng dựng lại trong
+dịch vụ: một chỗ kiểm tra dễ rà soát hơn hai chỗ.
 
 ### Hạn mức
 
@@ -261,7 +239,7 @@ còn lại không bị ảnh hưởng** — đó là lý do mỗi bên một kho
 RATE_LIMIT_PER_MINUTE: 300
 ```
 
-Áp dụng **riêng cho từng khoá**, không phải tổng. Vượt trả **429**.
+Áp dụng **riêng cho từng địa chỉ máy gọi**, không phải tổng. Vượt trả **429**.
 
 Đếm theo **khung, không theo lời gọi**. Một video tốn CPU bằng số khung nó sinh
 ra, nên nếu tính mỗi video là một lượt thì gói 60 ảnh vào một tệp video là tiêu
@@ -269,22 +247,24 @@ ra, nên nếu tính mỗi video là một lượt thì gói 60 ảnh vào một
 cửa, rồi trừ tiếp đúng số khung thật — **trước khi** chấm khung nào.
 
 Đây không phải thủ tục hình thức: mỗi khung tốn ~220ms CPU, nên một bên gửi đều
-đặn là làm nghẽn tất cả các bên khác mà không cần cố ý phá hoại. Khoá đúng cũng
-không cứu được chuyện đó — chỉ hạn mức mới cứu được.
+đặn là làm nghẽn tất cả các bên khác mà không cần cố ý phá hoại.
 
-Mặc định `300` khung/phút, tức khoảng năm video đầy khung mỗi phút cho mỗi bên.
+Mặc định `300` khung/phút cho mỗi địa chỉ.
+
+**Đây không phải biện pháp bảo mật.** Địa chỉ thì đổi bao nhiêu cũng được, và khi
+dịch vụ đứng sau reverse proxy thì mọi bên gọi đều mang địa chỉ của proxy nên
+dùng chung một ngân sách. Header `X-Forwarded-For` cố tình không được đọc: tin
+vào một header mà bên gọi tự đặt được thì chẳng khác gì phát ngân sách mới theo
+yêu cầu.
 
 Hạn mức đếm trong bộ nhớ của tiến trình. Chạy nhiều worker uvicorn thì mỗi worker
 đếm riêng, tức hạn mức thật bằng số worker nhân với con số này.
 
-Dịch vụ **không khởi động** nếu `API_KEYS` rỗng hoặc sai định dạng. Chạy hở không
-khoá là trạng thái nguy hiểm mà lại trông y hệt lúc chạy đúng, nên thà nó chết
-ngay lúc bật.
-
 ## Chạy sau HTTPS
 
-Khoá đi qua mạng ở dạng rõ. Trong mạng nội bộ thì chấp nhận được; ra Internet thì
-**bắt buộc phải có TLS**, nếu không ai bắt được gói tin là có khoá.
+Link ảnh và kết quả quét đi qua mạng ở dạng rõ. Trong mạng nội bộ thì chấp nhận
+được; ra Internet thì **bắt buộc phải có TLS** — và cũng chính chỗ này là nơi đặt
+phần xác thực, vì bản thân dịch vụ không có.
 
 Cách gọn nhất là đặt Caddy phía trước — nó tự xin và tự gia hạn chứng chỉ:
 
@@ -296,7 +276,6 @@ services:
     expose:
       - "8000"
     environment:
-      API_KEYS: ${API_KEYS}
 
   caddy:
     image: caddy:2
@@ -380,13 +359,9 @@ Sửa code rồi tưởng đang thử container mà thật ra đang thử bản 
 | `download_model.sh` | tải trọng số về `./models` |
 | `download_model_hf.py` | cách tải thay thế, chậm hơn |
 
-| `issue_key.py` | cấp khoá cho một bên gọi |
-
-Các công cụ đọc khoá từ biến môi trường `API_KEY`:
-
 ```bash
-API_KEY=khoa_cua_ban .venv/Scripts/python.exe scan.py duong/dan/anh.jpg
-API_KEY=khoa_cua_ban SCANNER_URL=http://may-khac:8000 .venv/Scripts/python.exe scan.py anh.jpg
+.venv/Scripts/python.exe scan.py duong/dan/anh.jpg
+SCANNER_URL=http://may-khac:8000 .venv/Scripts/python.exe scan.py anh.jpg
 ```
 
 ## Khi có trục trặc
@@ -402,8 +377,9 @@ thiếu RAM: mô hình cần khoảng 1GB lúc chạy.
 **`unhealthy` sau khi vừa bật.** Chờ thêm. Healthcheck cho 90 giây để nạp mô
 hình; máy chậm có thể cần lâu hơn.
 
-**Container thoát ngay, log ghi `API_KEYS is empty`.** Chưa cấu hình khoá nào.
-Xem mục "Khoá API".
+**Gọi API trả 429.** Vượt hạn mức khung/phút của địa chỉ đang gọi. Chờ một phút,
+hoặc nâng `RATE_LIMIT_PER_MINUTE`.
 
-**Gọi API trả 401, 403 hay 429.** 401 là quên header `X-API-Key`, 403 là khoá
-sai, 429 là vượt hạn mức của khoá đó.
+**Gọi API trả 400 kèm "non-public address".** Link trỏ tới một địa chỉ nội bộ.
+Đó là chốt chặn proxy mở; nếu link đúng là của hệ thống nhà thì thêm host đó vào
+`ALLOW_HOSTS`.
