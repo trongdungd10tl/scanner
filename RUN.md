@@ -312,6 +312,43 @@ Chú ý `expose` thay cho `ports` ở dịch vụ scanner: cổng 8000 chỉ m�
 nội bộ của Docker, không ra ngoài. Mọi lời gọi buộc phải đi qua Caddy, tức đi
 qua HTTPS.
 
+## Log
+
+Ghi ra thư mục `logs/` cạnh `docker-compose.yml`, cùng khuôn với `log4j2.xml` của
+gamefi:
+
+| Tệp | Chứa gì | Xoay khi | Giữ |
+|---|---|---|---|
+| `main.log` | INFO trở lên | 1024 MB hoặc sang ngày | 7 ngày |
+| `error.log` | chỉ ERROR | 300 MB hoặc sang ngày | 3 ngày |
+| `request.log` | một dòng mỗi lần gọi API | 1024 MB hoặc sang ngày | 3 ngày |
+
+Bản xoay được nén gz và đặt tên `main.2026-09-15-1.log.gz`.
+
+```bash
+tail -f logs/main.log
+tail -f logs/request.log
+zcat logs/main.2026-09-15-1.log.gz | less
+```
+
+Mỗi dòng mang một `contextId` — mã của request sinh ra nó, tương đương MDC bên
+Java. Nhiều request chạy song song thì log của chúng vẫn tách ra được:
+
+```
+2026-09-15 13:51:36 [MainThread] [cd95b636] INFO  request._log_request:77 - 10.0.0.9 POST /media-moderation/scan 200 412ms
+```
+
+**Trên máy chủ phải chown trước.** Container chạy bằng uid 10001, còn thư mục
+bind mount thì thuộc về root:
+
+```bash
+mkdir -p logs && chown 10001:10001 logs
+```
+
+Không làm bước này thì container không ghi được và thoát ngay lúc khởi động.
+
+Đổi chỗ ghi bằng biến `LOG_DIR`.
+
 ## Các lệnh hay dùng
 
 | | |

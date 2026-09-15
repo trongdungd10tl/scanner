@@ -37,6 +37,7 @@ import os
 import shutil
 import tempfile
 import time
+import uuid
 from collections import defaultdict, deque
 
 import torch
@@ -44,9 +45,10 @@ from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Request, Uplo
 from PIL import Image
 from transformers import AutoImageProcessor, SiglipForImageClassification
 
+import logs
 import media
 
-logging.basicConfig(level=logging.INFO)
+logs.setup()
 log = logging.getLogger("nsfw")
 
 MODEL_PATH = os.getenv("MODEL_PATH", "models/nsfw-image-detection")
@@ -59,6 +61,25 @@ CONTEXT_PATH = os.getenv("CONTEXT_PATH", "/media-moderation").rstrip("/")
 app = FastAPI(title="NSFW scanner", docs_url=CONTEXT_PATH + "/docs",
               openapi_url=CONTEXT_PATH + "/openapi.json")
 api = APIRouter(prefix=CONTEXT_PATH)
+
+
+@app.middleware("http")
+async def _log_request(request: Request, call_next):
+    """Mot dong trong request.log cho moi lan goi, kem ma contextId."""
+    token = logs.context_id.set(uuid.uuid4().hex[:8])
+    started = time.perf_counter()
+    status = 500
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        return response
+    finally:
+        logs.request_log.info(
+            "%s %s %s %s %dms",
+            request.client.host if request.client else "-",
+            request.method, request.url.path, status,
+            round((time.perf_counter() - started) * 1000))
+        logs.context_id.reset(token)
 
 _processor = None
 _model = None

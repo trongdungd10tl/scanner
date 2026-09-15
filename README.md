@@ -21,6 +21,7 @@ làm chưa được, và những chỗ đã vấp.
 | `download_model.sh` | tải trọng số, 8 kết nối song song |
 | `download_file.sh` | hàm tải dùng chung: 8 kết nối song song, nối tiếp được |
 | `download_model_hf.py` | cách tải thay thế, một kết nối |
+| `logs.py` | ghi log ra tệp, xoay vòng và nén |
 | `scan.py` | quét một ảnh từ dòng lệnh |
 | `smoke_test.py` | xác nhận dịch vụ còn sống |
 | `test_input.py` | kiểm cách xử lý đầu vào |

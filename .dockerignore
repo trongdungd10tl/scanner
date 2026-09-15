@@ -10,3 +10,4 @@ README.md
 RUN.md
 bin/
 scanner-image.tar.gz
+logs/

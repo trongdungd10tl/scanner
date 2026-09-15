@@ -62,12 +62,13 @@ RUN if [ "$APT_MIRROR" != "deb.debian.org" ]; then \
 COPY requirements-media.txt .
 RUN pip install --no-cache-dir -r requirements-media.txt
 
-COPY app.py media.py ./
+COPY app.py media.py logs.py ./
 
-RUN useradd --create-home --uid 10001 scanner && chown -R scanner:scanner /app
+RUN mkdir -p /app/logs \n    && useradd --create-home --uid 10001 scanner \n    && chown -R scanner:scanner /app
 USER scanner
 
 ENV MODEL_PATH=/app/models/nsfw-image-detection
+ENV LOG_DIR=/app/logs
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \

@@ -25,6 +25,11 @@ services:
     restart: unless-stopped
     ports:
       - "8000:8000"
+    # Log ghi ra ./logs de doc bang tail ma khong phai vao container.
+    # Container chay bang uid 10001, nen thu muc nay tren may chu phai thuoc ve
+    # uid do: mkdir -p logs && chown 10001:10001 logs
+    volumes:
+      - ./logs:/app/logs
     environment:
       RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-300}
       # Hosts the scanner may fetch from even though they resolve to a private
