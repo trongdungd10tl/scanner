@@ -1,33 +1,42 @@
 # Cách chạy
 
-## Trên server — một lệnh
+## Trên server — mang sẵn image, không build
 
-Chép thư mục này lên server, ví dụ vào `/root/apps/moderation`, rồi:
+`scanner-image.tar.gz` trong thư mục này là image **đã build sẵn**, gồm cả trọng
+số mô hình. Chép cả thư mục lên rồi:
+
+```bash
+cd /root/apps/moderation
+gunzip -c scanner-image.tar.gz | docker load
+docker compose up -d
+```
+
+Không có `--build`. Server **không cần mạng**, không tải lại gì cả.
+
+Image mang tên cố định `moderation-scanner:latest` (ghim bằng khoá `image:` trong
+`docker-compose.yml`), nên đổi tên thư mục cũng không sao.
+
+### Hoặc để server tự build
 
 ```bash
 cd /root/apps/moderation
 docker compose up -d --build
 ```
 
-Xong. Dịch vụ nghe ở cổng **8000**, gọi API quét ảnh được ngay.
-
-Không phải tải mô hình trước, không phải tạo thư mục, không phải đặt biến môi
-trường, không phải sửa gì trong tệp nào.
+Cách này server phải có mạng và tải lại ~400 MB: base image, ffmpeg, pip, và
+trọng số mô hình. Chậm hơn nhiều, chỉ dùng khi không tiện chép tệp image lên.
 
 ### Chép lên bằng cách nào
-
-```bash
-git clone <repo> /root/apps && cd /root/apps/moderation
-```
-
-Hoặc chép thẳng từ máy của bạn — **nhớ loại hai thư mục này ra**:
 
 ```bash
 rsync -av --exclude .venv --exclude models       ./moderation/ root@server:/root/apps/moderation/
 ```
 
-`.venv/` là môi trường ảo của Windows, trên Linux vô dụng; `models/` sẽ được tải
-lại trong lúc build. Hai thứ đó cộng lại hơn 3GB, chép lên chỉ tốn thời gian.
+**Loại hai thư mục đó ra.** `.venv/` là môi trường ảo của Windows, trên Linux vô
+dụng. `models/` không cần: trọng số đã nằm sẵn trong `scanner-image.tar.gz`, và
+lúc build thì `.dockerignore` cũng bỏ qua nó.
+
+Dịch vụ nghe ở cổng **8000** dưới đường dẫn `/media-moderation`.
 
 ### Server cần gì
 
@@ -36,7 +45,7 @@ lại trong lúc build. Hai thứ đó cộng lại hơn 3GB, chép lên chỉ t
 | Docker | có `docker compose` (bản v2) |
 | Ổ đĩa | ~3 GB cho image |
 | RAM | **tối thiểu 2 GB** — mô hình chiếm ~1 GB lúc chạy |
-| Mạng | chỉ cần **lúc build**, tải ~400 MB |
+| Mạng | **không cần** nếu nạp từ `scanner-image.tar.gz`; chỉ cần khi tự build (~400 MB) |
 
 Máy 1GB RAM sẽ bị hệ điều hành giết tiến trình lúc nạp mô hình, và biểu hiện là
 container cứ khởi động lại liên tục.

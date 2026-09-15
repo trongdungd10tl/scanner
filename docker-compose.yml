@@ -11,6 +11,10 @@
 # budget.
 services:
   scanner:
+    # Ghim ten image. Khong co dong nay thi compose tu dat ten theo THU MUC
+    # (<thu-muc>-scanner), nen doi ten thu muc tren server la no khong thay image
+    # da nap va build lai tu dau.
+    image: moderation-scanner:latest
     build:
       context: .
       args:
