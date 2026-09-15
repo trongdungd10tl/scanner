@@ -64,7 +64,9 @@ RUN pip install --no-cache-dir -r requirements-media.txt
 
 COPY app.py media.py logs.py ./
 
-RUN mkdir -p /app/logs \n    && useradd --create-home --uid 10001 scanner \n    && chown -R scanner:scanner /app
+RUN mkdir -p /app/logs \
+    && useradd --create-home --uid 10001 scanner \
+    && chown -R scanner:scanner /app
 USER scanner
 
 ENV MODEL_PATH=/app/models/nsfw-image-detection
