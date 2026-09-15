@@ -75,7 +75,7 @@ Chi tiết cách gọi, trần lấy mẫu và chốt chặn SSRF: xem `RUN.md`.
 
 ### Hạn mức
 
-**Dịch vụ không có xác thực.** Bất cứ thứ gì chạm được tới cổng 8000 đều dùng
+**Dịch vụ không có xác thực.** Bất cứ thứ gì chạm được tới cổng 8508 đều dùng
 được nó, nên **cổng đó không được để Internet chạm tới**: gắn vào mạng nội bộ,
 hoặc đặt một cổng vào phía trước lo phần xác thực.
 

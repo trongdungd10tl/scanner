@@ -71,9 +71,9 @@ USER scanner
 
 ENV MODEL_PATH=/app/models/nsfw-image-detection
 ENV LOG_DIR=/app/logs
-EXPOSE 8000
+EXPOSE 8508
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
-    CMD python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/media-moderation/health',timeout=4)"
+    CMD python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8508/media-moderation/health',timeout=4)"
 
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8508"]

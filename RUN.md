@@ -36,7 +36,7 @@ rsync -av --exclude .venv --exclude models       ./moderation/ root@server:/root
 dụng. `models/` không cần: trọng số đã nằm sẵn trong `scanner-image.tar.gz`, và
 lúc build thì `.dockerignore` cũng bỏ qua nó.
 
-Dịch vụ nghe ở cổng **8000** dưới đường dẫn `/media-moderation`.
+Dịch vụ nghe ở cổng **8508** dưới đường dẫn `/media-moderation`.
 
 ### Server cần gì
 
@@ -63,11 +63,11 @@ Nếu đang tải mà đứt mạng, chạy lại đúng câu lệnh đó — ph
 
 ### Mở cổng cho máy khác gọi
 
-Mặc định cổng 8000 mở ra mọi giao diện mạng của server. Tường lửa thường chặn
+Mặc định cổng 8508 mở ra mọi giao diện mạng của server. Tường lửa thường chặn
 sẵn, nên nếu gọi từ máy khác không được:
 
 ```bash
-ufw allow 8000/tcp
+ufw allow 8508/tcp
 ```
 
 Dịch vụ **không hỏi người gọi là ai**. Đừng mở cổng này ra Internet. Nếu ứng dụng
@@ -75,13 +75,13 @@ gọi nó chạy trên cùng server, đóng hẳn lại bằng cách sửa `dock
 
 ```yaml
 ports:
-  - "127.0.0.1:8000:8000"
+  - "127.0.0.1:8508:8508"
 ```
 
 ## Kiểm xem đã sống chưa
 
 ```bash
-curl http://localhost:8000/health
+curl http://localhost:8508/health
 ```
 
 ```json
@@ -104,10 +104,10 @@ phải hỏi lại. Không endpoint nào đòi xác thực.
 Ba endpoint đầu nhận **link**, `/media-moderation/scan/hls` cũng vậy:
 
 ```bash
-curl -X POST http://localhost:8000/media-moderation/scan          -F "url=https://.../anh.jpg"
-curl -X POST http://localhost:8000/media-moderation/scan/video    -F "url=https://.../video.mp4"
-curl -X POST http://localhost:8000/media-moderation/scan/document -F "url=https://.../tailieu.pdf"
-curl -X POST http://localhost:8000/media-moderation/scan/hls      -F "url=https://.../stream.m3u8"
+curl -X POST http://localhost:8508/media-moderation/scan          -F "url=https://.../anh.jpg"
+curl -X POST http://localhost:8508/media-moderation/scan/video    -F "url=https://.../video.mp4"
+curl -X POST http://localhost:8508/media-moderation/scan/document -F "url=https://.../tailieu.pdf"
+curl -X POST http://localhost:8508/media-moderation/scan/hls      -F "url=https://.../stream.m3u8"
 ```
 
 | Endpoint | Nhận |
@@ -225,15 +225,15 @@ Vượt hạn mức trả **429**.
 
 `/media-moderation/health` cho biết mô hình đã nạp xong hay chưa — healthcheck của Docker gọi nó.
 
-Có sẵn giao diện thử trong trình duyệt: <http://localhost:8000/media-moderation/docs>
+Có sẵn giao diện thử trong trình duyệt: <http://localhost:8508/media-moderation/docs>
 
 ## Không có xác thực
 
-Dịch vụ **không kiểm tra gì cả**: thứ gì gọi được tới cổng 8000 thì dùng được nó.
+Dịch vụ **không kiểm tra gì cả**: thứ gì gọi được tới cổng 8508 thì dùng được nó.
 Cổng đó do đó **không được để Internet chạm tới**. Hai cách thường dùng:
 
-- **Chỉ mở trong mạng nội bộ.** Trong `docker-compose.yml`, đổi `"8000:8000"`
-  thành `"127.0.0.1:8000:8000"` để chỉ chính máy đó gọi được, hoặc gắn container
+- **Chỉ mở trong mạng nội bộ.** Trong `docker-compose.yml`, đổi `"8508:8508"`
+  thành `"127.0.0.1:8508:8508"` để chỉ chính máy đó gọi được, hoặc gắn container
   vào mạng Docker chung với bên gọi và **bỏ hẳn `ports`** — lúc ấy chỉ các
   container cùng mạng thấy nó.
 - **Đặt một cổng vào phía trước** (Caddy, nginx, API gateway) và cho nó lo phần
@@ -283,7 +283,7 @@ services:
     build: .
     restart: unless-stopped
     expose:
-      - "8000"
+      - "8508"
     environment:
 
   caddy:
@@ -304,11 +304,11 @@ volumes:
 
 ```
 scan.tenmien-cua-ban.com {
-    reverse_proxy scanner:8000
+    reverse_proxy scanner:8508
 }
 ```
 
-Chú ý `expose` thay cho `ports` ở dịch vụ scanner: cổng 8000 chỉ mở trong mạng
+Chú ý `expose` thay cho `ports` ở dịch vụ scanner: cổng 8508 chỉ mở trong mạng
 nội bộ của Docker, không ra ngoài. Mọi lời gọi buộc phải đi qua Caddy, tức đi
 qua HTTPS.
 
@@ -362,19 +362,19 @@ Không làm bước này thì container không ghi được và thoát ngay lúc
 
 ```yaml
 ports:
-  - "9000:8000"
+  - "9000:8508"
 ```
 
 Chỉ đổi số bên trái. Số bên phải là cổng bên trong container, giữ nguyên.
 
 ## Chỉ cho máy này gọi
 
-Mặc định cổng 8000 mở ra mọi giao diện mạng, tức ai chung mạng cũng gọi được, và
+Mặc định cổng 8508 mở ra mọi giao diện mạng, tức ai chung mạng cũng gọi được, và
 dịch vụ **không hỏi người gọi là ai**. Muốn chỉ máy chủ gọi được:
 
 ```yaml
 ports:
-  - "127.0.0.1:8000:8000"
+  - "127.0.0.1:8508:8508"
 ```
 
 ## Khi đang sửa code
@@ -386,12 +386,12 @@ python -m venv .venv
 .venv/Scripts/python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 .venv/Scripts/python.exe -m pip install -r requirements.txt -r requirements-media.txt
 bash download_model.sh
-.venv/Scripts/python.exe -m uvicorn app:app --port 8000
+.venv/Scripts/python.exe -m uvicorn app:app --port 8508
 ```
 
 Trên Linux/macOS thay `.venv/Scripts/python.exe` bằng `.venv/bin/python`.
 
-**Đừng chạy cả hai cùng lúc.** Cả venv và container đều giữ cổng 8000 được mà
+**Đừng chạy cả hai cùng lúc.** Cả venv và container đều giữ cổng 8508 được mà
 không báo lỗi — request tới `localhost` sẽ vào bản venv vì nó khớp cụ thể hơn.
 Sửa code rồi tưởng đang thử container mà thật ra đang thử bản cũ.
 
@@ -407,7 +407,7 @@ Sửa code rồi tưởng đang thử container mà thật ra đang thử bản 
 
 ```bash
 .venv/Scripts/python.exe scan.py duong/dan/anh.jpg
-SCANNER_URL=http://may-khac:8000 .venv/Scripts/python.exe scan.py anh.jpg
+SCANNER_URL=http://may-khac:8508 .venv/Scripts/python.exe scan.py anh.jpg
 ```
 
 ## Khi có trục trặc
@@ -418,7 +418,7 @@ tải nối tiếp được từ chỗ đứt, không phải tải lại từ đ
 **Container cứ khởi động lại.** `docker compose logs` để xem lý do. Thường là
 thiếu RAM: mô hình cần khoảng 1GB lúc chạy.
 
-**Cổng 8000 đã bị chiếm.** Đổi cổng như mục trên, hoặc dừng thứ đang giữ nó.
+**Cổng 8508 đã bị chiếm.** Đổi cổng như mục trên, hoặc dừng thứ đang giữ nó.
 
 **`unhealthy` sau khi vừa bật.** Chờ thêm. Healthcheck cho 90 giây để nạp mô
 hình; máy chậm có thể cần lâu hơn.

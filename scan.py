@@ -18,7 +18,7 @@ if len(sys.argv) < 2:
     sys.exit(1)
 
 path = sys.argv[1]
-service = os.getenv("SCANNER_URL", "http://127.0.0.1:8000")
+service = os.getenv("SCANNER_URL", "http://127.0.0.1:8508")
 
 if not os.path.isfile(path):
     print("File not found:", path)

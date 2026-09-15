@@ -10,7 +10,7 @@ import urllib.request
 
 from PIL import Image
 
-service = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8000"
+service = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8508"
 
 buffer = io.BytesIO()
 Image.new("RGB", (256, 256), (200, 180, 160)).save(buffer, format="JPEG")

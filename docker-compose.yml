@@ -1,7 +1,7 @@
-# Starts the NSFW scanning service on port 8000. Everything it needs, model
+# Starts the NSFW scanning service on port 8508. Everything it needs, model
 # weights included, is inside the image, so there is nothing to prepare first.
 #
-# There is no authentication: anything that can reach port 8000 may use it. The
+# There is no authentication: anything that can reach port 8508 may use it. The
 # published port below must therefore stay on a network you control, or sit
 # behind a gateway that does the authenticating.
 #
@@ -24,7 +24,7 @@ services:
     container_name: nsfw-scanner
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "8508:8508"
     # Log ghi ra ./logs de doc bang tail ma khong phai vao container.
     # Container chay bang uid 10001, nen thu muc nay tren may chu phai thuoc ve
     # uid do: mkdir -p logs && chown 10001:10001 logs
