@@ -37,11 +37,14 @@ import os
 import shutil
 import tempfile
 import time
+import hashlib
+import hmac
 import uuid
 from collections import defaultdict, deque
 
 import torch
-from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import (APIRouter, Depends, FastAPI, File, Form, Header, HTTPException,
+                     Request, UploadFile)
 from PIL import Image
 from transformers import AutoImageProcessor, SiglipForImageClassification
 
@@ -58,9 +61,61 @@ RATE_LIMIT = int(os.getenv("RATE_LIMIT_PER_MINUTE", "300"))
 
 CONTEXT_PATH = os.getenv("CONTEXT_PATH", "/media-moderation").rstrip("/")
 
+
+def _read_keys():
+    """
+    Doc API_KEYS: "ten:khoa,ten2:sha256:<hex>".
+
+    Khoa duoc luu duoi dang bam, khong phai chuoi goc: ai doc duoc bien moi
+    truong hay tep .env cung khong goi duoc. Viet thang chuoi goc van chay -
+    no se duoc bam luc nap - nhung co canh bao, vi luc do chuoi goc nam tren
+    dia may chu.
+
+    De trong thi khong xac thuc, giu nguyen cach cu.
+    """
+    keys = {}
+    for muc in os.getenv("API_KEYS", "").split(","):
+        muc = muc.strip()
+        if not muc or ":" not in muc:
+            continue
+        ten, gia_tri = muc.split(":", 1)
+        ten, gia_tri = ten.strip(), gia_tri.strip()
+        if gia_tri.lower().startswith("sha256:"):
+            keys[gia_tri.split(":", 1)[1].strip().lower()] = ten
+        else:
+            keys[hashlib.sha256(gia_tri.encode()).hexdigest()] = ten
+            log.warning("API_KEYS chua khoa dang chu cho '%s'. Nen thay bang "
+                        "sha256:<hex> de chuoi goc khong nam tren may chu.", ten)
+    return keys
+
+
+API_KEYS = _read_keys()
+
+
+def _require_key(request: Request, x_api_key: str = Header(default="")):
+    """
+    Doi chieu X-API-Key voi API_KEYS.
+
+    So sanh bang compare_digest chu khong phai ==: phep so sanh thong thuong
+    dung som o byte dau tien khac nhau, va thoi gian tra loi do lo dan tung
+    byte cua khoa dung.
+    """
+    if not API_KEYS:
+        return "unknown"
+    bam = hashlib.sha256(x_api_key.encode()).hexdigest()
+    for luu, ten in API_KEYS.items():
+        if hmac.compare_digest(bam, luu):
+            request.state.caller = ten
+            return ten
+    raise HTTPException(status_code=401, detail="Missing or unknown X-API-Key")
+
 app = FastAPI(title="NSFW scanner", docs_url=CONTEXT_PATH + "/docs",
               openapi_url=CONTEXT_PATH + "/openapi.json")
-api = APIRouter(prefix=CONTEXT_PATH)
+# Hai router: moi duong dan quet deu di qua _require_key, con /health thi
+# khong - healthcheck trong Dockerfile goi no va khong mang theo khoa nao.
+# Tach lam hai de mot endpoint them sau nay khong lo bi quen bao ve.
+api = APIRouter(prefix=CONTEXT_PATH, dependencies=[Depends(_require_key)])
+public = APIRouter(prefix=CONTEXT_PATH)
 
 
 @app.middleware("http")
@@ -94,6 +149,9 @@ def _caller(request):
     is the proxy, so every caller shares one budget - see the note at the top of
     this file about why X-Forwarded-For is not read instead.
     """
+    ten = getattr(request.state, "caller", None)
+    if ten:
+        return ten
     return request.client.host if request.client else "unknown"
 
 
@@ -133,13 +191,17 @@ def _load_model():
 
 @app.on_event("startup")
 def startup():
-    log.warning("No authentication. Anything that can reach this port may use "
-                "it; keep it off the public internet. %d frames per minute per "
-                "client address.", RATE_LIMIT)
+    if API_KEYS:
+        log.info("Xac thuc bang X-API-Key. %d khoa duoc cau hinh. %d khung "
+                 "hinh moi phut cho moi ben goi.", len(API_KEYS), RATE_LIMIT)
+    else:
+        log.warning("No authentication. Anything that can reach this port may "
+                    "use it; keep it off the public internet. %d frames per "
+                    "minute per client address.", RATE_LIMIT)
     _load_model()
 
 
-@api.get("/health")
+@public.get("/health")
 def health():
     return {"status": "ok", "model_loaded": _model is not None}
 
@@ -318,4 +380,5 @@ async def scan_hls(request: Request, url: str = Form(...)):
         _discard(folder)
 
 
+app.include_router(public)
 app.include_router(api)
