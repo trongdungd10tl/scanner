@@ -30,6 +30,11 @@ services:
     # uid do: mkdir -p logs && chown 10001:10001 logs
     volumes:
       - ./logs:/app/logs
+    # May chu nay khong co duong ra Internet, nen ten mien cua CDN phai duoc chi
+    # thang vao dia chi noi bo cua may nginx. Giu nguyen ten mien chu khong goi
+    # bang IP: chung chi TLS cap cho ten do, goi bang IP la bat tay hong.
+    extra_hosts:
+      - "cdn-social.ringme.vn:172.16.107.130"
     environment:
       RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-300}
       # Hosts the scanner may fetch from even though they resolve to a private
@@ -37,4 +42,8 @@ services:
       # naming it the check that stops the scanner being an open proxy also
       # stops it reading what the caller owns. List only what is needed:
       #   ALLOW_HOSTS=cms.internal,192.168.1.10
-      ALLOW_HOSTS: ${ALLOW_HOSTS:-}
+      #
+      # cdn-social.ringme.vn nam trong danh sach nay vi extra_hosts o tren tro
+      # no vao 172.16.107.130 - mot dia chi private. Co extra_hosts ma thieu
+      # dong nay thi chinh cai chot chong SSRF se chan, va bao dung ly do.
+      ALLOW_HOSTS: ${ALLOW_HOSTS:-cdn-social.ringme.vn}
