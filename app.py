@@ -1,50 +1,47 @@
 """
-NSFW scanning service for images, video, PDFs and HLS streams.
+NSFW scanning service for images.
 
-Wraps the SigLIP2 model strangerguardhf/nsfw_image_detection behind HTTP. Video,
-documents and streams are reduced to still frames by media.py and scored frame
-by frame; every endpoint answers in its own response, with no job to poll for.
+Wraps the SigLIP2 model strangerguardhf/nsfw_image_detection behind HTTP. The
+one scanning endpoint answers in its own response, with no job to poll for:
+scoring an image measured about 220ms whatever its size.
 
-Images, video and streams are named by URL rather than uploaded: the caller has
-already stored the file somewhere, so sending the bytes again only moves them
-twice. Documents still accept an upload as well, since a PDF is often held
-before it is published anywhere. Anything named by URL goes through the
-public-address check in media.py, and ALLOW_HOSTS is what lets the scanner read
-from the application that sent the link.
+An image arrives either as a link or as the file itself, exactly one of the two.
+A link suits an image already published; the file suits an upload that should be
+judged before it is stored anywhere, so a rejected image never reaches the CDN.
+A link goes through the public-address check in media.py, and ALLOW_HOSTS and
+FETCH_VIA are what let the scanner read from hosts inside the network.
 
-Staying synchronous is only honest because the work is bounded. Scoring one
-frame measured about 220ms, and media.py never yields more than MAX_FRAMES, so
-the slowest case is a predictable handful of seconds rather than an open-ended
-wait. Batching frames through the model measured only 1.2x faster, because torch
-already spreads a single image across every core, so frames are scored one at a
-time and the code stays simple.
+A second model, NudeNet, looks for exposed body parts and reports the
+strongest one as the score "Explicit". The SigLIP labels judge the mood of the
+whole picture and get it wrong both ways - a close-up of a face filling the frame
+with skin scored Pornography 0.97, while a sex scene scored 0.18 - so they only
+decide what a person should look at. Explicit is what callers block on, because
+it needs an actual exposed genital, anus or female breast to rise. NudeNet is
+trained on photographs; drawn porn still rests on the SigLIP Hentai label.
 
 There is no authentication. Anything that can reach the port can spend the
 model's CPU on it, so the port must not be one the open internet can reach -
 bind it to a private network, or put a gateway in front that does the
 authenticating.
 
-The frame budget is still enforced, now per client address instead of per
+The image budget is still enforced, now per client address instead of per
 caller. It is a safeguard against one client starving the rest, not a security
 control: an address is trivially many, and behind a reverse proxy every caller
 arrives wearing the proxy's address and shares a single bucket. X-Forwarded-For
 is deliberately not read, because trusting a header any client can set would
 hand out a fresh budget on request.
 """
+import base64
 import io
 import logging
 import os
-import shutil
-import tempfile
 import time
-import hashlib
-import hmac
 import uuid
 from collections import defaultdict, deque
 
+import numpy as np
 import torch
-from fastapi import (APIRouter, Depends, FastAPI, File, Form, Header, HTTPException,
-                     Request, UploadFile)
+from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Request, UploadFile
 from PIL import Image
 from transformers import AutoImageProcessor, SiglipForImageClassification
 
@@ -59,63 +56,52 @@ HUB_NAME = "strangerguardhf/nsfw_image_detection"
 UNSAFE_LABELS = {"Hentai", "Pornography", "Enticing or Sensual"}
 RATE_LIMIT = int(os.getenv("RATE_LIMIT_PER_MINUTE", "300"))
 
+# NudeNet classes that count as explicit. Exposed buttocks, bellies and armpits
+# are left out on purpose: swimwear has them.
+EXPLICIT_CLASSES = {
+    "FEMALE_GENITALIA_EXPOSED",
+    "MALE_GENITALIA_EXPOSED",
+    "ANUS_EXPOSED",
+    "FEMALE_BREAST_EXPOSED",
+}
+EXPLICIT_LABEL = "Explicit"
+# NudeNet often calls a bare male chest FEMALE_BREAST_EXPOSED at around 0.6
+# (real female nudity scored 0.71 and up). Set to 0.75 after a second shirtless
+# man scored 0.639; real nudity from 0.6 to 0.75 now goes to review only.
+BREAST_MIN_SCORE = float(os.getenv("BREAST_MIN_SCORE", "0.75"))
+# NudeNet is ignored when SigLIP rates the picture Normal at least this high.
+# Real nudity scored Normal 0.17 or less; NudeNet's false hits on a close-up
+# face and a shirtless man scored 0.93 and 0.99.
+NORMAL_VETO = float(os.getenv("NORMAL_VETO", "0.5"))
+
+# The verdict the callers act on ("action": block / review / pass):
+#   block  - genitals or anus >= PART_SURE, whatever SigLIP says;
+#          - genitals or anus >= PART_BLOCK, unless vetoed by Normal (above);
+#          - a female breast >= BREAST_MIN_SCORE with Enticing or Sensual >=
+#            BREAST_SENSUAL, unless vetoed; without that Sensual it is only
+#            reviewed (NudeNet takes a bare male chest for a breast);
+#          - or a grey part (genitals, anus or breast >= PART_GREY) and
+#            Pornography > PORN_BLOCK: two models agreeing;
+#   review - Pornography >= PORN_REVIEW, whatever NudeNet saw, or Hentai >
+#            HENTAI_REVIEW. SigLIP alone never blocks: it called two
+#            ordinary pictures pornography;
+#   pass   - the rest.
+GENITAL_CLASSES = {"FEMALE_GENITALIA_EXPOSED", "MALE_GENITALIA_EXPOSED", "ANUS_EXPOSED"}
+BREAST_CLASS = "FEMALE_BREAST_EXPOSED"
+PART_SURE = float(os.getenv("PART_SURE", "0.8"))
+PART_BLOCK = float(os.getenv("PART_BLOCK", "0.6"))
+PART_GREY = float(os.getenv("PART_GREY", "0.5"))
+PORN_BLOCK = float(os.getenv("PORN_BLOCK", "0.95"))
+PORN_REVIEW = float(os.getenv("PORN_REVIEW", "0.7"))
+HENTAI_REVIEW = float(os.getenv("HENTAI_REVIEW", "0.8"))
+BREAST_SENSUAL = float(os.getenv("BREAST_SENSUAL", "0.4"))
+
 CONTEXT_PATH = os.getenv("CONTEXT_PATH", "/media-moderation").rstrip("/")
 
 
-def _read_keys():
-    """
-    Doc API_KEYS: "ten:khoa,ten2:sha256:<hex>".
-
-    Khoa duoc luu duoi dang bam, khong phai chuoi goc: ai doc duoc bien moi
-    truong hay tep .env cung khong goi duoc. Viet thang chuoi goc van chay -
-    no se duoc bam luc nap - nhung co canh bao, vi luc do chuoi goc nam tren
-    dia may chu.
-
-    De trong thi khong xac thuc, giu nguyen cach cu.
-    """
-    keys = {}
-    for muc in os.getenv("API_KEYS", "").split(","):
-        muc = muc.strip()
-        if not muc or ":" not in muc:
-            continue
-        ten, gia_tri = muc.split(":", 1)
-        ten, gia_tri = ten.strip(), gia_tri.strip()
-        if gia_tri.lower().startswith("sha256:"):
-            keys[gia_tri.split(":", 1)[1].strip().lower()] = ten
-        else:
-            keys[hashlib.sha256(gia_tri.encode()).hexdigest()] = ten
-            log.warning("API_KEYS chua khoa dang chu cho '%s'. Nen thay bang "
-                        "sha256:<hex> de chuoi goc khong nam tren may chu.", ten)
-    return keys
-
-
-API_KEYS = _read_keys()
-
-
-def _require_key(request: Request, x_api_key: str = Header(default="")):
-    """
-    Doi chieu X-API-Key voi API_KEYS.
-
-    So sanh bang compare_digest chu khong phai ==: phep so sanh thong thuong
-    dung som o byte dau tien khac nhau, va thoi gian tra loi do lo dan tung
-    byte cua khoa dung.
-    """
-    if not API_KEYS:
-        return "unknown"
-    bam = hashlib.sha256(x_api_key.encode()).hexdigest()
-    for luu, ten in API_KEYS.items():
-        if hmac.compare_digest(bam, luu):
-            request.state.caller = ten
-            return ten
-    raise HTTPException(status_code=401, detail="Missing or unknown X-API-Key")
-
 app = FastAPI(title="NSFW scanner", docs_url=CONTEXT_PATH + "/docs",
               openapi_url=CONTEXT_PATH + "/openapi.json")
-# Hai router: moi duong dan quet deu di qua _require_key, con /health thi
-# khong - healthcheck trong Dockerfile goi no va khong mang theo khoa nao.
-# Tach lam hai de mot endpoint them sau nay khong lo bi quen bao ve.
-api = APIRouter(prefix=CONTEXT_PATH, dependencies=[Depends(_require_key)])
-public = APIRouter(prefix=CONTEXT_PATH)
+router = APIRouter(prefix=CONTEXT_PATH)
 
 
 @app.middleware("http")
@@ -138,6 +124,7 @@ async def _log_request(request: Request, call_next):
 
 _processor = None
 _model = None
+_detector = None
 _recent = defaultdict(deque)
 
 
@@ -149,32 +136,21 @@ def _caller(request):
     is the proxy, so every caller shares one budget - see the note at the top of
     this file about why X-Forwarded-For is not read instead.
     """
-    ten = getattr(request.state, "caller", None)
-    if ten:
-        return ten
     return request.client.host if request.client else "unknown"
 
 
-def _charge(name, units=1):
-    """
-    Bills a caller in frames, not requests.
-
-    A video costs as much CPU as the frames it yields, so charging it as one
-    request would let a caller spend the whole budget many times over by
-    wrapping images in a video container. The media endpoints charge once to be
-    let in, then again for the frames they actually produced, before any of
-    those frames is scored.
-    """
+def _charge(name):
+    """Counts one image against a caller's budget for the last minute."""
     now = time.monotonic()
     window = _recent[name]
     while window and now - window[0] > 60:
         window.popleft()
-    if len(window) + units > RATE_LIMIT:
+    if len(window) >= RATE_LIMIT:
         raise HTTPException(
             status_code=429,
-            detail="Rate limit of " + str(RATE_LIMIT) + " frames per minute exceeded",
+            detail="Rate limit of " + str(RATE_LIMIT) + " images per minute exceeded",
         )
-    window.extend([now] * units)
+    window.append(now)
 
 
 def _load_model():
@@ -187,23 +163,40 @@ def _load_model():
     _model = SiglipForImageClassification.from_pretrained(source)
     _model.eval()
     log.info("Ready. Labels: %s", _model.config.id2label)
+    _load_detector()
+
+
+def _load_detector():
+    """
+    Loads NudeNet. Its weights ship inside the pip package, so this needs no
+    network. If the package is missing - an older image running this file - the
+    service keeps answering without the Explicit score instead of failing to
+    start: callers then block nothing and only queue images for review, which
+    is the safe way to be wrong.
+    """
+    global _detector
+    if _detector is not None:
+        return
+    try:
+        from nudenet import NudeDetector
+        _detector = NudeDetector()
+        log.info("NudeNet ready. Explicit classes: %s", sorted(EXPLICIT_CLASSES))
+    except Exception as e:
+        log.error("NudeNet NOT loaded, Explicit score disabled: %s", e)
 
 
 @app.on_event("startup")
 def startup():
-    if API_KEYS:
-        log.info("Xac thuc bang X-API-Key. %d khoa duoc cau hinh. %d khung "
-                 "hinh moi phut cho moi ben goi.", len(API_KEYS), RATE_LIMIT)
-    else:
-        log.warning("No authentication. Anything that can reach this port may "
-                    "use it; keep it off the public internet. %d frames per "
-                    "minute per client address.", RATE_LIMIT)
+    log.warning("No authentication. Anything that can reach this port may "
+                "use it; keep it off the public internet. %d images per "
+                "minute per client address.", RATE_LIMIT)
     _load_model()
 
 
-@public.get("/health")
+@router.get("/health")
 def health():
-    return {"status": "ok", "model_loaded": _model is not None}
+    return {"status": "ok", "model_loaded": _model is not None,
+            "explicit_loaded": _detector is not None}
 
 
 def _score(image):
@@ -216,6 +209,58 @@ def _score(image):
     return scores, round(sum(v for k, v in scores.items() if k in UNSAFE_LABELS), 4)
 
 
+def _explicit(image):
+    """
+    Highest NudeNet score among the explicit classes, and every detection for
+    the log. NudeNet expects OpenCV's BGR channel order.
+    """
+    if _detector is None:
+        return None, [], 0.0, 0.0
+    found = _detector.detect(np.ascontiguousarray(np.asarray(image)[:, :, ::-1]))
+    hits = [(d["class"], round(float(d["score"]), 4)) for d in found]
+    top = max([s for c, s in hits if c in EXPLICIT_CLASSES
+               and (c != "FEMALE_BREAST_EXPOSED" or s >= BREAST_MIN_SCORE)] or [0.0])
+    genital = max([s for c, s in hits if c in GENITAL_CLASSES] or [0.0])
+    breast = max([s for c, s in hits if c == BREAST_CLASS] or [0.0])
+    return round(top, 4), hits, genital, breast
+
+
+def _decide(scores, genital, breast, vetoed):
+    """block / review / pass and the reason, by the rule at the top of this file."""
+    porn = scores.get("Pornography", 0.0)
+    grey = genital >= PART_GREY or breast >= PART_GREY
+    if genital >= PART_SURE:
+        # SigLIP rated close-ups of a penis Normal 0.89-0.98: a veto there let
+        # them through. NudeNet's false hits on faces stayed under 0.7.
+        return "block", "explicit"
+    if genital >= PART_BLOCK and not vetoed:
+        return "block", "explicit"
+    breast_only = breast >= BREAST_MIN_SCORE and not vetoed
+    if breast_only and scores.get("Enticing or Sensual", 0.0) >= BREAST_SENSUAL:
+        # A bare male chest still reaches 0.78 as a female breast; SigLIP rated
+        # it Sensual 0.01, real topless women 0.50-0.86.
+        return "block", "breast"
+    if grey and porn > PORN_BLOCK:
+        return "block", "grey+porn"
+    if breast_only:
+        return "review", "breast"
+    if porn >= PORN_REVIEW:
+        return "review", "porn"
+    if scores.get("Hentai", 0.0) > HENTAI_REVIEW:
+        # NudeNet barely sees drawings, so a nude drawing gets no other check
+        return "review", "hentai"
+    return "pass", ""
+
+
+def _thumbnail(image, side=512):
+    """A JPEG of at most side x side pixels, base64-encoded."""
+    copy = image.copy()
+    copy.thumbnail((side, side))
+    buffer = io.BytesIO()
+    copy.save(buffer, format="JPEG", quality=80)
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
 def _open(data):
     try:
         return Image.open(io.BytesIO(data)).convert("RGB")
@@ -223,26 +268,10 @@ def _open(data):
         raise HTTPException(status_code=400, detail="Not an image")
 
 
-def _worst_of(frames):
-    """
-    Reports the single most explicit frame rather than an average.
-
-    One explicit second inside an hour of harmless footage is exactly what this
-    is meant to catch, and an average would bury it.
-    """
-    worst_scores, worst_nsfw, worst_marker = None, -1.0, None
-    for marker, path in frames:
-        with Image.open(path) as frame:
-            scores, nsfw = _score(frame.convert("RGB"))
-        if nsfw > worst_nsfw:
-            worst_scores, worst_nsfw, worst_marker = scores, nsfw, marker
-    return worst_scores, worst_nsfw, worst_marker
-
-
 def _reply(kind, scores, nsfw, count, worst, started):
     return {
         "type": kind,
-        "label": max(scores, key=scores.get),
+        "label": max((k for k in scores if k != EXPLICIT_LABEL), key=scores.get),
         "scores": scores,
         "nsfw_score": nsfw,
         "frames_scanned": count,
@@ -251,134 +280,63 @@ def _reply(kind, scores, nsfw, count, worst, started):
     }
 
 
-def _discard(*paths):
-    for path in paths:
-        if not path:
-            continue
-        if os.path.isdir(path):
-            shutil.rmtree(path, ignore_errors=True)
-        else:
-            try:
-                os.remove(path)
-            except OSError:
-                pass
-
-
-def _scan_frames(caller, kind, frames, label, started):
-    _charge(caller, len(frames))
-    scores, nsfw, worst = _worst_of(frames)
-    reply = _reply(kind, scores, nsfw, len(frames), worst, started)
-    log.info("%s %s %s -> %s nsfw=%.4f over %d frames",
-             caller, kind, label, reply["label"], nsfw, len(frames))
-    return reply
-
-
-def _one_source(file, url):
+@router.post("/scan")
+async def scan_image(request: Request, url: str = Form(default=""),
+                     file: UploadFile = File(default=None),
+                     evidence: bool = Form(default=False)):
     """
-    Requires exactly one of file or url.
+    Scores one image, sent as url or as file.
 
-    Accepting both and silently preferring one hides a caller's mistake: a
-    request meaning to scan a link but carrying a stale upload would come back
-    with a confident answer about the wrong thing.
+    Exactly one is required. Accepting both and quietly preferring one would
+    hide a caller's mistake behind a confident answer about the wrong image.
     """
-    if bool(url) == bool(file is not None and file.filename):
-        raise HTTPException(
-            status_code=400, detail="Send exactly one of file or url"
-        )
+    has_file = file is not None and bool(file.filename)
+    if bool(url) == has_file:
+        raise HTTPException(status_code=400, detail="Send exactly one of url or file")
+    caller = _caller(request)
+    _charge(caller)
+    _load_model()
 
-
-async def _bytes_from(file, url):
     if url:
         try:
-            return media.fetch_bytes(url), url
+            data = media.fetch_bytes(url)
         except media.MediaError as e:
             raise HTTPException(status_code=400, detail=str(e))
-    data = await file.read()
-    if not data:
-        raise HTTPException(status_code=400, detail="Empty file")
-    return data, file.filename
-
-
-@api.post("/scan")
-async def scan_image(request: Request, url: str = Form(...)):
-    caller = _caller(request)
-    _charge(caller)
-    _load_model()
-
-    try:
-        data = media.fetch_bytes(url)
-    except media.MediaError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        label = url
+    else:
+        data = await file.read(media.MAX_DOWNLOAD_BYTES + 1)
+        if not data:
+            raise HTTPException(status_code=400, detail="Empty file")
+        if len(data) > media.MAX_DOWNLOAD_BYTES:
+            raise HTTPException(status_code=400, detail="Image is larger than allowed")
+        label = "upload:" + file.filename
 
     started = time.perf_counter()
-    scores, nsfw = _score(_open(data))
+    image = _open(data)
+    scores, nsfw = _score(image)
+    explicit, hits, genital, breast = _explicit(image)
+    vetoed = scores.get("Normal", 0.0) >= NORMAL_VETO
+    if explicit and vetoed:
+        # SigLIP is sure the picture is ordinary: a NudeNet hit here has been a
+        # face, lips or a hand mistaken for a body part. Kept in the log only.
+        log.info("%s explicit %.4f vetoed, Normal=%.4f", caller, explicit, scores["Normal"])
+        explicit = 0.0
+    if explicit is not None:
+        # same meaning as before "action" existed, for callers not yet reading it
+        scores[EXPLICIT_LABEL] = explicit
+    action, reason = _decide(scores, genital, breast, vetoed)
     reply = _reply("image", scores, nsfw, 1, None, started)
-    log.info("%s image %s -> %s nsfw=%.4f", caller, url, reply["label"], nsfw)
+    reply["action"] = action
+    reply["reason"] = reason
+    reply["parts"] = {"genital": round(genital, 4), "breast": round(breast, 4)}
+    if evidence:
+        # A caller that sent only a link never held the image, so it has
+        # nothing to keep as proof of what was blocked. Hand back the copy
+        # already fetched, shrunk to a thumbnail.
+        reply["evidence_jpeg"] = _thumbnail(image)
+    log.info("%s image %s -> %s nsfw=%.4f explicit=%s action=%s %s parts=%s",
+             caller, label, reply["label"], nsfw, explicit, action, reason, hits)
     return reply
 
 
-@api.post("/scan/video")
-async def scan_video(request: Request, url: str = Form(...)):
-    caller = _caller(request)
-    _charge(caller)
-    _load_model()
-
-    handle, source = tempfile.mkstemp(suffix=".video")
-    os.close(handle)
-    folder = None
-    try:
-        started = time.perf_counter()
-        try:
-            media.fetch_to_file(url, source)
-            frames = media.video_frames(source)
-        except media.MediaError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-        folder = os.path.dirname(frames[0][1])
-        return _scan_frames(caller, "video", frames, url, started)
-    finally:
-        _discard(source, folder)
-
-
-@api.post("/scan/document")
-async def scan_document(request: Request, file: UploadFile = File(default=None),
-                        url: str = Form(default="")):
-    caller = _caller(request)
-    _one_source(file, url)
-    _charge(caller)
-    _load_model()
-
-    data, label = await _bytes_from(file, url)
-    folder = None
-    try:
-        started = time.perf_counter()
-        try:
-            pages = media.pdf_pages(data)
-        except media.MediaError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-        folder = os.path.dirname(pages[0][1])
-        return _scan_frames(caller, "document", pages, label, started)
-    finally:
-        _discard(folder)
-
-
-@api.post("/scan/hls")
-async def scan_hls(request: Request, url: str = Form(...)):
-    caller = _caller(request)
-    _charge(caller)
-    _load_model()
-
-    folder = None
-    try:
-        started = time.perf_counter()
-        try:
-            frames = media.hls_frames(url)
-        except media.MediaError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-        folder = os.path.dirname(frames[0][1])
-        return _scan_frames(caller, "hls", frames, url, started)
-    finally:
-        _discard(folder)
-
-
-app.include_router(public)
-app.include_router(api)
+app.include_router(router)

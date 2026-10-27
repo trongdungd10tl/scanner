@@ -23,7 +23,7 @@ cd /root/apps/moderation
 docker compose up -d --build
 ```
 
-Cách này server phải có mạng và tải lại ~400 MB: base image, ffmpeg, pip, và
+Cách này server phải có mạng và tải lại ~400 MB: base image, pip, và
 trọng số mô hình. Chậm hơn nhiều, chỉ dùng khi không tiện chép tệp image lên.
 
 ### Chép lên bằng cách nào
@@ -96,34 +96,16 @@ docker compose ps
 
 Chờ tới khi cột STATUS ghi **`(healthy)`**.
 
-## Bốn endpoint
+## Endpoint quét ảnh
 
-Cả bốn đều **trả kết quả ngay trong response** — không có việc để chờ, không
-phải hỏi lại. Không endpoint nào đòi xác thực.
-
-Ba endpoint đầu nhận **link**, `/media-moderation/scan/hls` cũng vậy:
+**Trả kết quả ngay trong response** — không có việc để chờ, không phải hỏi lại.
+Chỉ nhận **link**:
 
 ```bash
-curl -X POST http://localhost:8508/media-moderation/scan          -F "url=https://.../anh.jpg"
-curl -X POST http://localhost:8508/media-moderation/scan/video    -F "url=https://.../video.mp4"
-curl -X POST http://localhost:8508/media-moderation/scan/document -F "url=https://.../tailieu.pdf"
-curl -X POST http://localhost:8508/media-moderation/scan/hls      -F "url=https://.../stream.m3u8"
+curl -X POST http://localhost:8508/media-moderation/scan -F "url=https://.../anh.jpg"
 ```
 
-| Endpoint | Nhận |
-|---|---|
-| `/media-moderation/scan` | **chỉ `url`** |
-| `/media-moderation/scan/video` | **chỉ `url`** |
-| `/media-moderation/scan/document` | `url` hoặc `file` |
-| `/media-moderation/scan/hls` | chỉ `url` |
-
-Gửi `file` vào `/media-moderation/scan` hay `/media-moderation/scan/video` trả **422** — FastAPI báo thiếu trường
-`url` bắt buộc.
-
-`/media-moderation/scan/document` vẫn nhận tệp tải lên, vì một PDF thường được giữ trước khi
-công bố ở đâu đó nên chưa có link để gửi. Với nó, phải gửi **đúng một** trong
-`url` và `file`; cả hai hoặc không có đều trả **400** — nhận cả hai rồi âm thầm
-chọn một sẽ che mất lỗi của bên gọi.
+Gửi `file` thay cho `url` trả **422** — FastAPI báo thiếu trường `url` bắt buộc.
 
 ### Link nội bộ — `ALLOW_HOSTS`
 
@@ -153,16 +135,15 @@ Trần này cần thiết hơn ở đường tải tệp lên: tệp tải lên 
 gọi, còn link thì tốn của scanner — một request ngắn có thể bắt nó kéo về tệp
 lớn tuỳ ý.
 
-Dịch vụ cũng **đối chiếu `Content-Length`**. Kết nối đứt giữa chừng để lại tệp
-ngắn hơn mà không ném lỗi nào, và với video thì điều đó tệ hơn cả báo lỗi: phần
-tải được có thể quét ra sạch, trong khi phần không về mới là phần đáng lo.
+Dịch vụ cũng **đối chiếu `Content-Length`**: kết nối đứt giữa chừng để lại ảnh
+thiếu mà không ném lỗi nào, nên tải thiếu byte là trả **400** thay vì chấm một
+ảnh cụt.
 
-Cả bốn trả về **cùng một hình dạng JSON**, nên bên gọi viết một hàm đọc là dùng
-được cho mọi loại:
+Kết quả trả về:
 
 ```json
 {
-  "type": "video",
+  "type": "image",
   "label": "Normal",
   "scores": {
     "Anime Picture": 0.0121,
@@ -172,49 +153,26 @@ Cả bốn trả về **cùng một hình dạng JSON**, nên bên gọi viết 
     "Enticing or Sensual": 0.0135
   },
   "nsfw_score": 0.0267,
-  "frames_scanned": 42,
-  "worst_at": 128.5,
-  "took_ms": 9310.4
+  "frames_scanned": 1,
+  "worst_at": null,
+  "took_ms": 214.3
 }
 ```
 
 | Trường | Ý nghĩa |
 |---|---|
-| `type` | `image`, `video`, `document` hay `hls` |
 | `nsfw_score` | **con số duy nhất cần đọc** — so với ngưỡng của bạn |
-| `scores` | điểm của **khung tệ nhất**, không phải trung bình |
-| `frames_scanned` | số khung/trang đã chấm; ảnh luôn là 1 |
-| `worst_at` | giây (video, hls) hoặc số trang (tài liệu); ảnh là `null` |
-
-`nsfw_score` lấy theo **khung tệ nhất**, không lấy trung bình. Một giây phản cảm
-giữa một tiếng phim vô hại chính là thứ cần bắt, mà lấy trung bình thì nó chìm
-nghỉm. `worst_at` cho biết xem lại ở đâu.
+| `scores` | điểm của từng nhãn |
+| `frames_scanned`, `worst_at` | luôn là `1` và `null`; giữ lại để bên gọi cũ không vỡ |
 
 Đọc `README.md` trước khi chọn ngưỡng — con số mặc định chưa được hiệu chỉnh
 trên dữ liệu thật.
 
-### Mỗi loại lấy bao nhiêu khung
-
-| | Cách lấy | Trần |
-|---|---|---|
-| Video | rải đều theo độ dài video | `MAX_FRAMES` = 60 |
-| HLS | 60 giây đầu của luồng | `MAX_FRAMES` = 60 |
-| Tài liệu | mỗi trang một ảnh | `MAX_PAGES` = 40 |
-
-Khoảng lấy mẫu tính từ chính độ dài video, nên **video 30 giây hay 3 tiếng đều
-cho ra tối đa 60 khung** — thời gian trả lời vì thế đoán trước được. Chấm một
-khung mất ~220ms, nên trường hợp chậm nhất khoảng 13 giây.
-
-Luồng HLS trực tiếp không bao giờ kết thúc, nên bắt buộc phải cắt: `HLS_SECONDS`
-mặc định 60.
-
-Đổi được bằng biến môi trường, nhưng nhớ rằng nâng trần là kéo dài thời gian
-người gọi phải chờ.
-
-### `/media-moderation/scan/hls` chỉ nhận địa chỉ công cộng
+### Chỉ nhận địa chỉ công cộng
 
 URL trỏ vào `127.0.0.1`, dải nội bộ (`192.168.x`, `10.x`, `172.16-31.x`), địa
-chỉ link-local hay scheme không phải `http`/`https` đều bị từ chối **400**.
+chỉ link-local hay scheme không phải `http`/`https` đều bị từ chối **400**, trừ
+host đã khai trong `ALLOW_HOSTS`.
 
 Không có chốt này thì dịch vụ thành một cái proxy mở: ai gọi được API cũng có
 thể bắt server của bạn gửi request tới cổng quản trị của chính nó, tới CSDL của
@@ -250,15 +208,10 @@ RATE_LIMIT_PER_MINUTE: 300
 
 Áp dụng **riêng cho từng địa chỉ máy gọi**, không phải tổng. Vượt trả **429**.
 
-Đếm theo **khung, không theo lời gọi**. Một video tốn CPU bằng số khung nó sinh
-ra, nên nếu tính mỗi video là một lượt thì gói 60 ảnh vào một tệp video là tiêu
-60 lần ngân sách mà chỉ mất một lượt. Các endpoint media trừ một đơn vị để vào
-cửa, rồi trừ tiếp đúng số khung thật — **trước khi** chấm khung nào.
-
-Đây không phải thủ tục hình thức: mỗi khung tốn ~220ms CPU, nên một bên gửi đều
+Đếm theo **số ảnh**. Đây không phải thủ tục hình thức: mỗi ảnh tốn ~220ms CPU, nên một bên gửi đều
 đặn là làm nghẽn tất cả các bên khác mà không cần cố ý phá hoại.
 
-Mặc định `300` khung/phút cho mỗi địa chỉ.
+Mặc định `300` ảnh/phút cho mỗi địa chỉ.
 
 **Đây không phải biện pháp bảo mật.** Địa chỉ thì đổi bao nhiêu cũng được, và khi
 dịch vụ đứng sau reverse proxy thì mọi bên gọi đều mang địa chỉ của proxy nên
@@ -384,7 +337,7 @@ Chạy bằng môi trường ảo thì không phải build lại image sau mỗi
 ```bash
 python -m venv .venv
 .venv/Scripts/python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-.venv/Scripts/python.exe -m pip install -r requirements.txt -r requirements-media.txt
+.venv/Scripts/python.exe -m pip install -r requirements.txt
 bash download_model.sh
 .venv/Scripts/python.exe -m uvicorn app:app --port 8508
 ```
@@ -423,7 +376,7 @@ thiếu RAM: mô hình cần khoảng 1GB lúc chạy.
 **`unhealthy` sau khi vừa bật.** Chờ thêm. Healthcheck cho 90 giây để nạp mô
 hình; máy chậm có thể cần lâu hơn.
 
-**Gọi API trả 429.** Vượt hạn mức khung/phút của địa chỉ đang gọi. Chờ một phút,
+**Gọi API trả 429.** Vượt hạn mức ảnh/phút của địa chỉ đang gọi. Chờ một phút,
 hoặc nâng `RATE_LIMIT_PER_MINUTE`.
 
 **Gọi API trả 400 kèm "non-public address".** Link trỏ tới một địa chỉ nội bộ.

@@ -3,3 +3,9 @@ models/
 __pycache__/
 bin/
 build.log
+.env
+nudenet-layer/wheels/
+dist/
+*.tar
+*.tar.gz
+*.tar.gz.new

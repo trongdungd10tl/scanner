@@ -5,10 +5,7 @@
 # Step order is deliberate. Docker discards every cached layer below the first
 # one that changes, so the slow, rarely edited installs come first: on this
 # machine they measured 564s for apt, 1163s for the Python packages and 296s to
-# fetch the weights. That is also why the media dependencies sit in their own
-# requirements file installed further down. Folding them into requirements.txt
-# would move the edit above the weights layer and turn a two minute rebuild into
-# a thirty minute one every time one of them changes.
+# fetch the weights.
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -31,36 +28,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY download_file.sh download_model.sh ./
 RUN sed -i 's/\r$//' download_file.sh download_model.sh && bash download_model.sh
 
-# apt's ffmpeg. It costs 130MB to fetch and 455MB in the image, against 39MB
-# for a static build, and it drags in Mesa and LLVM for a service with no
-# display. It is still the right choice, because the static build was tried and
-# crashes: any URL with a hostname segfaulted, and so did reading a plain local
-# MPEG-TS file, which is the format HLS segments arrive in. Two unrelated
-# crashes in one binary is enough.
-#
-# Set APT_MIRROR when deb.debian.org is slow or unreachable from the build
-# machine. From here it delivered 17 KB/s, which put this step at two hours,
-# while a local mirror measured 12 MB/s for the same file -- the packages are
-# not the problem, the route to them is. Measure before choosing one:
-#
-#   curl -o /dev/null -w '%{speed_download}\n' \
-#        https://MIRROR/debian/dists/trixie/main/binary-amd64/Packages.gz
-#
-#   APT_MIRROR=your.mirror docker compose build
-# Lines mentioning security are left alone: a mirror that carries /debian often
-# does not carry /debian-security, and rewriting both turns a slow build into a
-# failing one with a 404 on the security Release file.
-ARG APT_MIRROR=deb.debian.org
-RUN if [ "$APT_MIRROR" != "deb.debian.org" ]; then \
-        sed -i "/security/!s|deb.debian.org|$APT_MIRROR|g" \
-            /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list 2>/dev/null || true; \
-    fi \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY requirements-media.txt .
-RUN pip install --no-cache-dir -r requirements-media.txt
+# NudeNet, the exposed-body-part detector behind the "Explicit" score. Its
+# 12MB ONNX weights ship inside the wheel, so nothing is fetched at run time.
+# It has its own layer below the weights so adding it did not throw away the
+# cached download above. Pinned: a new release could move the scores that the
+# callers' block threshold (0.6) was chosen against.
+RUN pip install --no-cache-dir nudenet==3.4.2
 
 COPY app.py media.py logs.py ./
 

@@ -1,0 +1,15 @@
+# Chay code moi tren image cu, khong build lai.
+#
+# scanner-image.tar.gz duoc build truoc khi bo video/HLS/PDF, nen code nam trong
+# image la ban cu. Mount de ba tep code nay vao thi container chay ban moi,
+# con torch, transformers va trong so mo hinh van lay tu image.
+#
+# docker compose tu doc tep nay cung docker-compose.yml. Khi da build image moi
+# tu code hien tai thi xoa tep nay di.
+services:
+  scanner:
+    volumes:
+      - ./app.py:/app/app.py:ro
+      - ./media.py:/app/media.py:ro
+      - ./logs.py:/app/logs.py:ro
+    command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8508"]

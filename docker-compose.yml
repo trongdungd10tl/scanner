@@ -1,58 +1,39 @@
-# Starts the NSFW scanning service on port 8508. Everything it needs, model
-# weights included, is inside the image, so there is nothing to prepare first.
+# Dich vu quet anh NSFW cho kakoak, chay tren 10.226.234.15:8508.
 #
-# There is no authentication: anything that can reach port 8508 may use it. The
-# published port below must therefore stay on a network you control, or sit
-# behind a gateway that does the authenticating.
+# Chi goi noi bo, khong qua nginx hay ten mien: service API tren 10.226.234.49
+# goi thang
+#   POST http://10.226.234.15:8508/media-moderation/scan   (form: url=<link anh>)
 #
-# RATE_LIMIT_PER_MINUTE applies per client address and counts frames, not
-# requests, because a video costs as much as the frames it yields. Behind a
-# reverse proxy every caller arrives wearing the proxy's address and shares one
-# budget.
+# Khong co xac thuc: may nao trong mang toi duoc cong 8508 deu goi duoc, nen
+# cong nay khong duoc mo ra Internet.
 services:
   scanner:
     # Ghim ten image. Khong co dong nay thi compose tu dat ten theo THU MUC
     # (<thu-muc>-scanner), nen doi ten thu muc tren server la no khong thay image
     # da nap va build lai tu dau.
     image: moderation-scanner:latest
-    build:
-      context: .
-      args:
-        # Set APT_MIRROR when deb.debian.org is slow from your build machine.
-        # It measured 17 KB/s here against 12 MB/s for a local mirror.
-        APT_MIRROR: ${APT_MIRROR:-deb.debian.org}
+    # Image da nap san bang "docker load"; khong bao gio tu keo hay tu build.
+    pull_policy: never
     container_name: nsfw-scanner
     restart: unless-stopped
-    ports:
-      - "8508:8508"
+    # Dung thang mang cua may chu, khong tao network rieng. Tren kakoak-app03
+    # chain DOCKER trong iptables bi xoa nen Docker khong tao duoc network moi
+    # ("Unable to enable SKIP DNAT rule"). Dich vu nghe thang cong 8508 cua may.
+    network_mode: host
     # Log ghi ra ./logs de doc bang tail ma khong phai vao container.
     # Container chay bang uid 10001, nen thu muc nay tren may chu phai thuoc ve
     # uid do: mkdir -p logs && chown 10001:10001 logs
+    # Khong co quyen chown thi mo quyen ghi: mkdir -p logs && chmod 777 logs
     volumes:
       - ./logs:/app/logs
-    # May chu nay khong co duong ra Internet, nen ten mien cua CDN phai duoc chi
-    # thang vao dia chi noi bo cua may nginx. Giu nguyen ten mien chu khong goi
-    # bang IP: chung chi TLS cap cho ten do, goi bang IP la bat tay hong.
-    extra_hosts:
-      - "cdn-social.ringme.vn:172.16.107.130"
     environment:
       RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-300}
-      # Hosts the scanner may fetch from even though they resolve to a private
-      # address. The application sending links usually sits on one, and without
-      # naming it the check that stops the scanner being an open proxy also
-      # stops it reading what the caller owns. List only what is needed:
-      #   ALLOW_HOSTS=cms.internal,192.168.1.10
-      #
-      # cdn-social.ringme.vn nam trong danh sach nay vi extra_hosts o tren tro
-      # no vao 172.16.107.130 - mot dia chi private. Co extra_hosts ma thieu
-      # dong nay thi chinh cai chot chong SSRF se chan, va bao dung ly do.
-      ALLOW_HOSTS: ${ALLOW_HOSTS:-cdn-social.ringme.vn}
-      # Khoa goi API, dang "ten:sha256:<hex>", nhieu ben thi ngan cach bang dau
-      # phay. De trong thi khong xac thuc - ai toi duoc cong nay deu goi duoc.
-      #
-      #   printf %s 'khoa-cua-ban' | sha256sum
-      #   API_KEYS=social-cms:sha256:<hex>
-      #
-      # Ben goi gui kem header X-API-Key: <khoa goc>. Rieng /health khong doi
-      # khoa, vi healthcheck trong image goi no.
-      API_KEYS: ${API_KEYS:-}
+      # Host duoc phep tai du phan giai ra dia chi noi bo. Chot chong SSRF chan
+      # moi dia chi noi bo, nen anh nam tren may trong mang 10.226.x phai duoc
+      # neu ten o day. Chi neu dung host can thiet, ngan cach bang dau phay.
+      ALLOW_HOSTS: ${ALLOW_HOSTS:-}
+      # Tai anh CDN tu dia chi noi bo thay vi dia chi public. Tu trong mang,
+      # videocdn.kakoak.tls.tl (43.243.120.248) tu choi ket noi; nginx cua CDN
+      # chay ngay tren may nay o cong 8080. Container dung mang cua may chu
+      # (network_mode: host) nen 127.0.0.1 chinh la 10.226.234.15.
+      FETCH_VIA: ${FETCH_VIA:-videocdn.kakoak.tls.tl=127.0.0.1:8080}

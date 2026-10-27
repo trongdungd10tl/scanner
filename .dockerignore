@@ -11,3 +11,6 @@ RUN.md
 bin/
 scanner-image.tar.gz
 logs/
+.env
+nudenet-layer/
+dist/
